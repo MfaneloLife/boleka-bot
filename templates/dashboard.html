@@ -1,0 +1,691 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Boleka SA Marketplace Bot v1.0</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: linear-gradient(135deg, #0a0a2e 0%, #1a1a4e 50%, #0d0d35 100%);
+            color: #e0e0e0;
+            min-height: 100vh;
+            padding: 16px;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+
+        /* Header */
+        .header {
+            text-align: center;
+            padding: 24px 0;
+        }
+
+        .header h1 {
+            font-size: 1.8rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, #00d4aa, #7b61ff);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 4px;
+        }
+
+        .header .subtitle {
+            font-size: 0.85rem;
+            color: #888;
+        }
+
+        .badge {
+            display: inline-block;
+            background: rgba(0, 212, 170, 0.15);
+            color: #00d4aa;
+            padding: 3px 10px;
+            border-radius: 12px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            margin-top: 8px;
+        }
+
+        /* Cards */
+        .card {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 16px;
+            padding: 20px;
+            margin-bottom: 16px;
+            backdrop-filter: blur(10px);
+        }
+
+        .card h3 {
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: #888;
+            margin-bottom: 16px;
+        }
+
+        /* Stats Grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 12px;
+        }
+
+        .stat-item {
+            background: rgba(255, 255, 255, 0.04);
+            border-radius: 12px;
+            padding: 16px;
+            text-align: center;
+        }
+
+        .stat-item .label {
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: #666;
+            margin-bottom: 6px;
+        }
+
+        .stat-item .value {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: #fff;
+        }
+
+        .stat-item .value.green {
+            color: #00d4aa;
+        }
+
+        .stat-item .value.blue {
+            color: #7b61ff;
+        }
+
+        /* City List */
+        .city-list {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+            gap: 8px;
+        }
+
+        .city-item {
+            background: rgba(255, 255, 255, 0.04);
+            border-radius: 10px;
+            padding: 12px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.85rem;
+        }
+
+        .city-item .count {
+            font-weight: 700;
+            font-size: 1.1rem;
+            min-width: 28px;
+            text-align: center;
+        }
+
+        .count.ok { color: #00d4aa; }
+        .count.warn { color: #ff9800; }
+        .count.max { color: #ff4757; }
+
+        /* Buttons */
+        .btn-row {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-bottom: 16px;
+        }
+
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 12px;
+            font-size: 0.9rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            color: #fff;
+            flex: 1;
+            min-width: 120px;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #00d4aa, #00b894);
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 24px rgba(0, 212, 170, 0.3);
+        }
+
+        .btn-secondary {
+            background: linear-gradient(135deg, #7b61ff, #6c5ce7);
+        }
+
+        .btn-secondary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 24px rgba(123, 97, 255, 0.3);
+        }
+
+        .btn-outline {
+            background: transparent;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .btn-outline:hover {
+            background: rgba(255, 255, 255, 0.06);
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+
+        .btn-danger {
+            background: transparent;
+            border: 1px solid rgba(255, 71, 87, 0.4);
+            color: #ff4757;
+        }
+
+        .btn-danger:hover {
+            background: rgba(255, 71, 87, 0.1);
+        }
+
+        /* Dropdown */
+        .form-group {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        select {
+            flex: 1;
+            min-width: 160px;
+            padding: 12px 16px;
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            background: rgba(255, 255, 255, 0.05);
+            color: #fff;
+            font-size: 0.9rem;
+            cursor: pointer;
+            appearance: none;
+            -webkit-appearance: none;
+            background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e");
+            background-repeat: no-repeat;
+            background-position: right 12px center;
+            background-size: 16px;
+        }
+
+        select option {
+            background: #1a1a4e;
+            color: #fff;
+        }
+
+        /* Logs */
+        .log-container {
+            max-height: 400px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 0.78rem;
+            line-height: 1.6;
+        }
+
+        .log-entry {
+            padding: 4px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+            display: flex;
+            gap: 10px;
+        }
+
+        .log-entry .log-time {
+            color: #666;
+            white-space: nowrap;
+            min-width: 80px;
+        }
+
+        .log-entry .log-msg {
+            color: #bbb;
+            word-break: break-word;
+        }
+
+        .log-entry.error .log-msg {
+            color: #ff4757;
+        }
+
+        .log-entry.success .log-msg {
+            color: #00d4aa;
+        }
+
+        /* Status Indicators */
+        .status-dot {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+
+        .status-dot.running {
+            background: #00d4aa;
+            animation: pulse 1.5s infinite;
+        }
+
+        .status-dot.idle {
+            background: #666;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.3; }
+        }
+
+        /* Toast */
+        .toast {
+            position: fixed;
+            bottom: 24px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #1a1a4e;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 12px;
+            padding: 12px 24px;
+            color: #fff;
+            font-size: 0.9rem;
+            z-index: 1000;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+            pointer-events: none;
+        }
+
+        .toast.show {
+            opacity: 1;
+        }
+
+        .toast.success {
+            border-color: #00d4aa;
+        }
+
+        .toast.error {
+            border-color: #ff4757;
+        }
+
+        /* Section title */
+        .section-label {
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: #555;
+            margin-bottom: 4px;
+        }
+
+        .section-value {
+            font-size: 1rem;
+            color: #ddd;
+        }
+
+        /* Footer */
+        .footer {
+            text-align: center;
+            padding: 24px 0;
+            color: #555;
+            font-size: 0.75rem;
+        }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 3px;
+        }
+
+        /* Mobile tweaks */
+        @media (max-width: 480px) {
+            .header h1 {
+                font-size: 1.4rem;
+            }
+            .btn {
+                padding: 10px 16px;
+                font-size: 0.8rem;
+            }
+            .stats-grid {
+                grid-template-columns: 1fr 1fr;
+                gap: 8px;
+            }
+            .city-list {
+                grid-template-columns: 1fr 1fr;
+                gap: 6px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <h1>🇿🇦 Boleka SA Marketplace Bot</h1>
+            <div class="subtitle">v1.0 — Facebook + Instagram Auto-Sync</div>
+            <span class="badge" id="statusBadge">
+                <span class="status-dot idle" id="statusDot"></span>
+                <span id="statusText">Idle</span>
+            </span>
+        </div>
+
+        <!-- Quick Stats -->
+        <div class="card">
+            <h3>📊 Dashboard</h3>
+            <div class="stats-grid">
+                <div class="stat-item">
+                    <div class="label">Posts Today</div>
+                    <div class="value green" id="postsToday">{{ posts_today }}</div>
+                </div>
+                <div class="stat-item">
+                    <div class="label">Last Run</div>
+                    <div class="section-value" id="lastRun">{{ last_run }}</div>
+                </div>
+                <div class="stat-item">
+                    <div class="label">Next Run</div>
+                    <div class="section-value" id="nextRun">{{ next_run }}</div>
+                </div>
+                <div class="stat-item">
+                    <div class="label">Status</div>
+                    <div class="value blue" id="runningStatus">
+                        {% if is_running %}Running{% else %}Ready{% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- City Post Counts -->
+        <div class="card">
+            <h3>🏙️ City Post Counts (Max 2/city)</h3>
+            <div class="city-list" id="cityList">
+                {% for city in cities %}
+                <div class="city-item">
+                    <span>{{ city }}</span>
+                    <span class="count {% if city_post_count.get(city, 0) == 0 %}ok{% elif city_post_count.get(city, 0) < 2 %}warn{% else %}max{% endif %}" id="count-{{ city|replace(' ', '') }}">
+                        {{ city_post_count.get(city, 0) }}
+                    </span>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+
+        <!-- Controls -->
+        <div class="card">
+            <h3>🎮 Controls</h3>
+            <div class="btn-row">
+                <button class="btn btn-primary" id="btnRunNow" onclick="runNow()">
+                    ▶ Run Now
+                </button>
+                <button class="btn btn-outline" id="btnResetDaily" onclick="resetDaily()">
+                    🔄 Reset Counts
+                </button>
+                <button class="btn btn-outline" id="btnClearLogs" onclick="clearLogs()">
+                    🧹 Clear Logs
+                </button>
+            </div>
+            <div class="form-group">
+                <select id="citySelect">
+                    <option value="">Select a city for test post...</option>
+                    {% for city in cities %}
+                    <option value="{{ city }}">{{ city }}</option>
+                    {% endfor %}
+                </select>
+                <button class="btn btn-secondary" id="btnTestPost" onclick="testPost()">
+                    🧪 Test Post
+                </button>
+            </div>
+            <div id="testPostMsg" style="margin-top: 10px; font-size: 0.85rem; color: #7b61ff; display: none;">
+                ✅ Posted to Facebook. Instagram will auto-sync.
+            </div>
+        </div>
+
+        <!-- Live Logs -->
+        <div class="card">
+            <h3>📜 Recent Logs</h3>
+            <div class="log-container" id="logContainer">
+                {% if logs %}
+                    {% for ts, msg in logs %}
+                    <div class="log-entry {% if 'ERROR' in msg or '❌' in msg %}error{% elif '✅' in msg or 'SUCCESS' in msg %}success{% endif %}">
+                        <span class="log-time">{{ ts.split(' ')[1] if ' ' in ts else ts }}</span>
+                        <span class="log-msg">{{ msg }}</span>
+                    </div>
+                    {% endfor %}
+                {% else %}
+                    <div class="log-entry">
+                        <span class="log-time">--</span>
+                        <span class="log-msg">No logs yet. Bot is ready to run.</span>
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <div class="footer">
+            Boleka SA Marketplace Bot v1.0 | Posts to Facebook → Instagram auto-syncs via Account Center<br>
+            Schedule: 08:00 · 12:00 · 16:00 · 20:00 SAST | Max 20 posts/day
+        </div>
+    </div>
+
+    <!-- Toast -->
+    <div class="toast" id="toast"></div>
+
+    <script>
+        // Auto-refresh status every 10 seconds
+        let refreshTimer = null;
+
+        function startAutoRefresh() {
+            if (refreshTimer) clearInterval(refreshTimer);
+            refreshTimer = setInterval(refreshStatus, 10000);
+        }
+
+        function showToast(msg, type) {
+            const toast = document.getElementById('toast');
+            toast.textContent = msg;
+            toast.className = 'toast ' + (type || '') + ' show';
+            setTimeout(() => {
+                toast.classList.remove('show');
+            }, 3000);
+        }
+
+        function setButtonsDisabled(disabled) {
+            document.getElementById('btnRunNow').disabled = disabled;
+            document.getElementById('btnTestPost').disabled = disabled;
+            if (disabled) {
+                document.getElementById('statusDot').className = 'status-dot running';
+                document.getElementById('statusText').textContent = 'Running...';
+                document.getElementById('runningStatus').textContent = 'Running';
+                document.getElementById('runningStatus').className = 'value green';
+            } else {
+                document.getElementById('statusDot').className = 'status-dot idle';
+                document.getElementById('statusText').textContent = 'Idle';
+                document.getElementById('runningStatus').textContent = 'Ready';
+                document.getElementById('runningStatus').className = 'value blue';
+            }
+        }
+
+        async function refreshStatus() {
+            try {
+                const resp = await fetch('/api/status');
+                const data = await resp.json();
+
+                // Update running status
+                if (data.is_running) {
+                    setButtonsDisabled(true);
+                } else {
+                    setButtonsDisabled(false);
+                }
+
+                // Update posts today
+                document.getElementById('postsToday').textContent = data.posts_today;
+
+                // Update last run
+                if (data.last_run) {
+                    const d = new Date(data.last_run);
+                    document.getElementById('lastRun').textContent =
+                        d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+                }
+
+                // Update next run
+                if (data.next_run) {
+                    const d = new Date(data.next_run);
+                    document.getElementById('nextRun').textContent =
+                        d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+                }
+
+                // Update city counts
+                if (data.city_post_count) {
+                    for (const [city, count] of Object.entries(data.city_post_count)) {
+                        const el = document.getElementById('count-' + city.replace(/\s/g, ''));
+                        if (el) {
+                            el.textContent = count;
+                            el.className = 'count ' + (count === 0 ? 'ok' : count < 2 ? 'warn' : 'max');
+                        }
+                    }
+                }
+            } catch (err) {
+                console.error('Status refresh error:', err);
+            }
+
+            // Also refresh logs
+            try {
+                const logResp = await fetch('/api/logs');
+                const logData = await logResp.json();
+                const container = document.getElementById('logContainer');
+                if (logData.logs && logData.logs.length > 0) {
+                    container.innerHTML = logData.logs.map(l => {
+                        const shortTime = l.timestamp.split(' ')[1] || l.timestamp;
+                        const isError = l.message.includes('ERROR') || l.message.includes('❌');
+                        const isSuccess = l.message.includes('✅') || l.message.includes('SUCCESS');
+                        return `<div class="log-entry ${isError ? 'error' : isSuccess ? 'success' : ''}">
+                            <span class="log-time">${shortTime}</span>
+                            <span class="log-msg">${escapeHtml(l.message)}</span>
+                        </div>`;
+                    }).reverse().join('');
+                }
+                container.scrollTop = container.scrollHeight;
+            } catch (err) {
+                console.error('Log refresh error:', err);
+            }
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        async function runNow() {
+            setButtonsDisabled(true);
+            try {
+                const resp = await fetch('/api/run', { method: 'POST' });
+                const data = await resp.json();
+                if (data.success) {
+                    showToast('🚀 Bot cycle started! Check logs for progress.', 'success');
+                } else {
+                    showToast('⚠️ ' + data.message, 'error');
+                }
+            } catch (err) {
+                showToast('❌ Request failed: ' + err.message, 'error');
+            }
+            // Refresh in a moment
+            setTimeout(refreshStatus, 3000);
+        }
+
+        async function testPost() {
+            const city = document.getElementById('citySelect').value;
+            if (!city) {
+                showToast('⚠️ Please select a city first.', 'error');
+                return;
+            }
+
+            setButtonsDisabled(true);
+            const msgEl = document.getElementById('testPostMsg');
+            msgEl.style.display = 'block';
+            msgEl.textContent = '⏳ Running test post for ' + city + '...';
+
+            try {
+                const formData = new FormData();
+                formData.append('city', city);
+                const resp = await fetch('/api/test-post', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    msgEl.textContent = '✅ Posted to Facebook. Instagram will auto-sync.';
+                    msgEl.style.color = '#00d4aa';
+                    showToast('✅ Test post sent for ' + city + '! Instagram will auto-sync.', 'success');
+                } else {
+                    msgEl.textContent = '❌ ' + data.message;
+                    msgEl.style.color = '#ff4757';
+                    showToast('❌ Test post failed.', 'error');
+                }
+            } catch (err) {
+                msgEl.textContent = '❌ Request failed: ' + err.message;
+                msgEl.style.color = '#ff4757';
+                showToast('❌ Request failed: ' + err.message, 'error');
+            }
+
+            setTimeout(refreshStatus, 3000);
+        }
+
+        async function resetDaily() {
+            if (!confirm('Reset daily post counts? This will allow posting to all cities again.')) return;
+
+            try {
+                const resp = await fetch('/api/reset-daily', { method: 'POST' });
+                const data = await resp.json();
+                if (data.success) {
+                    showToast('🔄 Daily counts reset!', 'success');
+                    refreshStatus();
+                }
+            } catch (err) {
+                showToast('❌ Request failed: ' + err.message, 'error');
+            }
+        }
+
+        async function clearLogs() {
+            try {
+                const resp = await fetch('/api/logs/clear', { method: 'POST' });
+                const data = await resp.json();
+                if (data.success) {
+                    showToast('🧹 Logs cleared!', 'success');
+                    refreshStatus();
+                }
+            } catch (err) {
+                showToast('❌ Request failed: ' + err.message, 'error');
+            }
+        }
+
+        // Initialize
+        startAutoRefresh();
+        refreshStatus();
+
+        // Check initial running state from template
+        {% if is_running %}
+        setButtonsDisabled(true);
+        {% endif %}
+    </script>
+</body>
+</html>
