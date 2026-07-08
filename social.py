@@ -46,7 +46,7 @@ def post_to_fb(image_path, caption, page_access_token=None, page_id=None):
     
     try:
         # Initialize Facebook Graph API
-        graph = facebook.GraphAPI(access_token=page_access_token, version="2.0")
+        graph = facebook.GraphAPI(access_token=page_access_token, version="3.1")
         
         # Post photo to the Facebook Page
         # Using put_photo which uploads a photo with a message
