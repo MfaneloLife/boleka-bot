@@ -502,6 +502,18 @@ def start_scheduler():
 # ---------------------------------------------------------------------------
 
 @app.route("/")
+def index():
+    """Lightweight keep-alive / health-check endpoint.
+
+    External ping services (e.g. cron-job.org) hit the root URL every few
+    minutes to keep the Render free tier awake. Return a tiny plain-text
+    response instead of the full dashboard HTML so we never trip their
+    output-size limits.
+    """
+    return "Bot is active", 200, {"Content-Type": "text/plain; charset=utf-8"}
+
+
+@app.route("/dashboard")
 def dashboard():
     """Main dashboard page."""
     return render_template(

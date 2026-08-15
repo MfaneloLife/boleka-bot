@@ -111,10 +111,10 @@ Click **"Create Web Service"**. Render will build and deploy your app.
 
 ### Step 6: Keep the Scheduler Alive (Free Tier)
 
-Since Render free tier sleeps after inactivity, use an **external cron job** to ping your dashboard every 5 minutes:
+Since Render free tier sleeps after inactivity, use an **external cron job** to ping the bot's lightweight keep-alive endpoint every 5 minutes:
 
 1. Go to [cron-job.org](https://cron-job.org) (free)
-2. Create a cron job that pings: `https://your-app-name.onrender.com/`
+2. Create a cron job that pings: `https://your-app-name.onrender.com/` (returns a tiny `Bot is active` response)
 3. Set interval to **every 5 minutes**
 4. This keeps the service awake so the scheduler runs on time
 
@@ -187,7 +187,7 @@ nano .env
 python app.py
 ```
 
-Visit **http://localhost:5000** for the dashboard.
+Visit **http://localhost:5000/dashboard** for the dashboard (the root `/` is the lightweight keep-alive endpoint).
 
 ### Running with Gunicorn (production-like)
 
@@ -199,12 +199,12 @@ gunicorn app:app --bind 0.0.0.0:5000
 
 ## 📊 Web Dashboard
 
-The dashboard at `/` shows:
+The dashboard at `/dashboard` shows:
 - Posts today counter
 - Last run / Next run times
-- City-by-city post counts
+- National market + 3 posts/day schedule info
 - **Run Now** button to trigger a manual cycle
-- **Test Post** dropdown to test a post for any city
+- **Test Post** button to test a national post
 - Live scrolling logs
 - Mobile-friendly dark theme
 
@@ -262,7 +262,7 @@ MIT — Use freely for your marketplace.
 
 ## 🤝 Support
 
-For issues, check the logs on your Render dashboard or the web dashboard at `/`.
+For issues, check the logs on your Render dashboard or the web dashboard at `/dashboard`.
 
 ---
 
