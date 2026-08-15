@@ -28,6 +28,58 @@ HEADERS = {
     "Connection": "keep-alive",
 }
 
+# National markets are treated as a single South Africa-wide audience.
+# Passing one of these (or None) targets the whole country, not a city.
+NATIONAL_MARKETS = {
+    "south africa", "south africa (national)", "national", "sa",
+    "nationwide", "za", "rsa", "south africa national",
+}
+
+
+def _is_national(market):
+    """Return True if the given market should target all of South Africa."""
+    if not market:
+        return True
+    return market.strip().lower() in NATIONAL_MARKETS
+
+
+def _urls_to_try(market, sort_newest=False):
+    """Build the list of candidate URLs for a market (national or city)."""
+    if _is_national(market):
+        urls = [
+            f"{BASE_URL}/",
+            f"{BASE_URL}/browse",
+            f"{BASE_URL}/listings",
+            f"{BASE_URL}/all",
+            f"{BASE_URL}/explore",
+        ]
+        if sort_newest:
+            urls = [
+                f"{BASE_URL}/listings?sort=newest",
+                f"{BASE_URL}/browse?sort=newest",
+                f"{BASE_URL}/?sort=newest",
+            ] + urls
+        return urls
+
+    slug = market.lower().replace(" ", "-")
+    if sort_newest:
+        return [
+            f"{BASE_URL}/city/{slug}",
+            f"{BASE_URL}/location/{slug}",
+            f"{BASE_URL}/search?city={slug}&sort=newest",
+            f"{BASE_URL}/listings?city={slug}&sort=newest",
+            f"{BASE_URL}/browse/{slug}?sort=newest",
+            f"{BASE_URL}/",
+        ]
+    return [
+        f"{BASE_URL}/city/{slug}",
+        f"{BASE_URL}/location/{slug}",
+        f"{BASE_URL}/search?city={slug}",
+        f"{BASE_URL}/listings?city={slug}",
+        f"{BASE_URL}/browse/{slug}",
+        f"{BASE_URL}/",
+    ]
+
 
 def _fetch_page(url, timeout=15):
     """
@@ -70,16 +122,8 @@ def get_empty_categories(city):
     empty_categories = []
     
     try:
-        # Strategy 1: Try city-specific URL patterns
-        city_slug = city.lower().replace(" ", "-")
-        urls_to_try = [
-            f"{BASE_URL}/city/{city_slug}",
-            f"{BASE_URL}/location/{city_slug}",
-            f"{BASE_URL}/search?city={city_slug}",
-            f"{BASE_URL}/listings?city={city_slug}",
-            f"{BASE_URL}/browse/{city_slug}",
-            f"{BASE_URL}/",
-        ]
+        # Strategy 1: Try market-specific URL patterns (national or city)
+        urls_to_try = _urls_to_try(city)
         
         soup = None
         for url in urls_to_try:
@@ -230,16 +274,8 @@ def get_new_listings(city):
     listings = []
     
     try:
-        # Strategy 1: Try city-specific URL patterns
-        city_slug = city.lower().replace(" ", "-")
-        urls_to_try = [
-            f"{BASE_URL}/city/{city_slug}",
-            f"{BASE_URL}/location/{city_slug}",
-            f"{BASE_URL}/search?city={city_slug}&sort=newest",
-            f"{BASE_URL}/listings?city={city_slug}&sort=newest",
-            f"{BASE_URL}/browse/{city_slug}?sort=newest",
-            f"{BASE_URL}/",
-        ]
+        # Strategy 1: Try market-specific URL patterns (national or city)
+        urls_to_try = _urls_to_try(city, sort_newest=True)
         
         soup = None
         for url in urls_to_try:

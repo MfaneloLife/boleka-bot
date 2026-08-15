@@ -1,13 +1,17 @@
 """
-app.py - Boleka SA Marketplace Bot v1.0
+app.py - E-BOLEKA Marketplace Bot v2.0
 Main Flask application with scheduler, web dashboard, and post orchestration.
-Runs 4 times per day (8:00, 12:00, 16:00, 20:00 SAST) posting to Facebook.
-Instagram auto-syncs via Meta Account Center.
 
-NEW v1.0.1:
-- Persistent post history (posted_history.json) with 3-day dedup
-- State save/restore to survive Render sleep cycles
-- Randomized category selection to avoid repeating same content
+Posts 3 times per day (08:00, 13:00, 18:00 SAST) directly to the E-BOLEKA
+Facebook Page using Meta Graph API system user credentials.
+
+Content rules:
+  - National South Africa audience (single market - no city segmentation).
+  - Every post follows the high-converting ad framework:
+      Primary Text (hook + pain point + solution)
+      Headline (bold CTA / value highlight)
+      Description (clarifying subtext)
+      OFFER (incentive / discount / direct action)
 """
 
 import os
@@ -32,15 +36,14 @@ import schedule
 
 # Import local modules
 from scraper import get_empty_categories, get_new_listings
-from ai import generate_post
-from images import get_listing_image, get_unsplash_image, cleanup_images
+from ai import generate_post, MARKET
+from images import get_listing_image, get_unsplash_image, cleanup_images, enhance_image
 from social import post_to_fb
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 
-# Flask app
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET", "boleka-default-secret-2024")
 
@@ -51,31 +54,19 @@ IMAGES_DIR = BASE_DIR / "images"
 HISTORY_FILE = BASE_DIR / "posted_history.json"
 STATE_FILE = BASE_DIR / "bot_state.json"
 
-# Ensure images directory exists
 IMAGES_DIR.mkdir(exist_ok=True)
 
-# Dedup window: don't repeat same category/item in same city for 3 days
+# Dedup window: don't repeat the same category/item for 3 days.
 DEDUP_DAYS = 3
 
-# South African cities (9-city rotation)
-CITIES = [
-    "Johannesburg",
-    "Pretoria",
-    "Cape Town",
-    "Durban",
-    "Bloemfontein",
-    "Port Elizabeth",
-    "East London",
-    "Polokwane",
-    "Rustenburg",
-]
+# Single national market - no city/township segmentation.
+MARKET_NAME = MARKET  # "South Africa"
 
-# Post limits
-MAX_POSTS_PER_CITY_PER_DAY = 2
-MAX_POSTS_PER_DAY = 20
+# Posting frequency: exactly 3 posts per day.
+MAX_POSTS_PER_DAY = 3
 
 # Scheduler times (SAST = UTC+2)
-SCHEDULE_TIMES = ["08:00", "12:00", "16:00", "20:00"]
+SCHEDULE_TIMES = ["08:00", "13:00", "18:00"]
 
 # ---------------------------------------------------------------------------
 # Logging Setup
@@ -114,17 +105,12 @@ logger = setup_logging()
 # ---------------------------------------------------------------------------
 
 def _load_history():
-    """
-    Load the post history from posted_history.json.
-    Returns dict: {"city|||key|||post_type": "2026-07-15"}
-    Auto-expires entries older than DEDUP_DAYS.
-    """
+    """Load posted history, cleaning entries older than DEDUP_DAYS."""
     if not HISTORY_FILE.exists():
         return {}
     try:
         with open(HISTORY_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-        # Clean expired entries
         cutoff = (datetime.now() - timedelta(days=DEDUP_DAYS)).strftime("%Y-%m-%d")
         cleaned = {k: v for k, v in data.items() if v >= cutoff}
         if len(cleaned) != len(data):
@@ -145,32 +131,29 @@ def _save_history(history):
         logger.error(f"Error saving post history: {e}")
 
 
-def is_already_posted(city, key, post_type):
+def is_already_posted(key, post_type):
     """
-    Check if a category/item has already been posted in the same city
-    within the last DEDUP_DAYS days.
+    Check if a category/item has already been posted within DEDUP_DAYS.
 
-    For Type B, "key" is the listing title.
-    For Type A, "key" is the category name.
-
+    For Type B, "key" is the listing title. For Type A, "key" is the category.
     Returns True = skip, False = safe to post.
     """
     history = _load_history()
-    lookup = f"{city}|||{key}|||{post_type}"
+    lookup = f"{key}|||{post_type}"
     already = lookup in history
     if already:
-        logger.info(f"⏭️  Skipping already-posted: {city} | {key} | Type {post_type} (posted {history[lookup]})")
+        logger.info(f"⏭️  Skipping already-posted: {key} | Type {post_type} (posted {history[lookup]})")
     return already
 
 
-def mark_as_posted(city, key, post_type):
-    """Record that a category/item was posted for a city today."""
+def mark_as_posted(key, post_type):
+    """Record that a category/item was posted today."""
     history = _load_history()
     today_str = datetime.now().strftime("%Y-%m-%d")
-    lookup = f"{city}|||{key}|||{post_type}"
+    lookup = f"{key}|||{post_type}"
     history[lookup] = today_str
     _save_history(history)
-    logger.info(f"📝 Marked as posted: {city} | {key} | Type {post_type}")
+    logger.info(f"📝 Marked as posted: {key} | Type {post_type}")
 
 
 # ---------------------------------------------------------------------------
@@ -178,11 +161,10 @@ def mark_as_posted(city, key, post_type):
 # ---------------------------------------------------------------------------
 
 def _save_state():
-    """Save city_post_count and posts_today to bot_state.json."""
+    """Save posts_today and last_run to bot_state.json."""
     try:
         data = {
             "posts_today": state.posts_today,
-            "city_post_count": state.city_post_count,
             "last_run": state.last_run.isoformat() if state.last_run else None,
             "saved_at": datetime.now().isoformat(),
         }
@@ -193,10 +175,7 @@ def _save_state():
 
 
 def _load_state():
-    """
-    Load state from bot_state.json on startup.
-    Resets daily counters if the saved date is not today.
-    """
+    """Load state from bot_state.json on startup. Resets daily counter if stale."""
     if not STATE_FILE.exists():
         logger.info("No saved state file found. Starting fresh.")
         return
@@ -209,14 +188,11 @@ def _load_state():
         today_str = datetime.now().strftime("%Y-%m-%d")
 
         if saved_date != today_str:
-            logger.info(f"State from {saved_date} is stale. Resetting daily counters.")
+            logger.info(f"State from {saved_date} is stale. Resetting daily counter.")
             state.reset_daily_counts()
         else:
             state.posts_today = data.get("posts_today", 0)
-            saved_counts = data.get("city_post_count", {})
-            for city in CITIES:
-                state.city_post_count[city] = saved_counts.get(city, 0)
-            logger.info(f"Restored state: {state.posts_today} posts today, counts: {state.city_post_count}")
+            logger.info(f"Restored state: {state.posts_today} posts today")
 
         if data.get("last_run"):
             try:
@@ -240,8 +216,6 @@ class BotState:
         self.is_running = False
         self.run_logs = []
         self.posts_today = 0
-        self.city_post_count = {city: 0 for city in CITIES}
-        self.current_city_index = 0
 
     def add_log(self, message, level="INFO"):
         """Add a log entry for the dashboard."""
@@ -257,11 +231,10 @@ class BotState:
             logger.info(message)
 
     def reset_daily_counts(self):
-        """Reset daily post counters at midnight."""
+        """Reset the daily post counter at midnight."""
         self.posts_today = 0
-        self.city_post_count = {city: 0 for city in CITIES}
         _save_state()
-        logger.info("Daily post counters reset for new day.")
+        logger.info("Daily post counter reset for new day.")
 
 
 state = BotState()
@@ -270,45 +243,32 @@ state = BotState()
 # Post Orchestration Logic
 # ---------------------------------------------------------------------------
 
-def log_to_file(timestamp, city, platform, message):
+def log_to_file(timestamp, market, platform, message):
     """Log a post event to logs.txt."""
     with open(LOGS_DIR, "a", encoding="utf-8") as f:
-        f.write(f"{timestamp} | {city} | {platform} | {message}\n")
+        f.write(f"{timestamp} | {market} | {platform} | {message}\n")
 
 
-def _pick_unposted_category(empty_categories, city):
-    """
-    From the list of empty categories, pick one that hasn't been posted
-    in the last DEDUP_DAYS days for this city. Falls back to the first
-    available if all have been posted recently.
-
-    Returns the chosen category dict, or None if the list is empty.
-    """
+def _pick_unposted_category(empty_categories):
+    """Pick a category not posted within DEDUP_DAYS (national market)."""
     if not empty_categories:
         return None
 
-    # Shuffle so we don't always pick the same order
     shuffled = random.sample(empty_categories, len(empty_categories))
 
     for cat_info in shuffled:
         cat_name = cat_info["category"]
-        if not is_already_posted(city, cat_name, "A"):
-            logger.info(f"Selected unposted category for {city}: {cat_name}")
+        if not is_already_posted(cat_name, "A"):
+            logger.info(f"Selected unposted category: {cat_name}")
             return cat_info
 
-    # All categories have been posted within DEDUP_DAYS — pick a random one
     fallback = random.choice(empty_categories)
-    logger.info(f"All categories recently posted for {city}. Falling back to random: {fallback['category']}")
+    logger.info(f"All categories recently posted. Falling back to random: {fallback['category']}")
     return fallback
 
 
-def _pick_unposted_listing(listings, city):
-    """
-    From the list of listings, pick one whose title hasn't been posted
-    in the last DEDUP_DAYS days for this city.
-
-    Returns the chosen listing dict, or None if the list is empty.
-    """
+def _pick_unposted_listing(listings):
+    """Pick a listing not posted within DEDUP_DAYS (national market)."""
     if not listings:
         return None
 
@@ -316,32 +276,27 @@ def _pick_unposted_listing(listings, city):
 
     for listing in shuffled:
         title = listing["title"]
-        # Type B dedup by listing title (titles may vary slightly so exact match only)
-        if not is_already_posted(city, title, "B"):
-            logger.info(f"Selected unposted listing for {city}: {title}")
+        if not is_already_posted(title, "B"):
+            logger.info(f"Selected unposted listing: {title}")
             return listing
 
-    # All were posted recently — pick a random one anyway
     fallback = random.choice(listings)
-    logger.info(f"All listings recently posted for {city}. Falling back to random: {fallback['title']}")
+    logger.info(f"All listings recently posted. Falling back to random: {fallback['title']}")
     return fallback
 
 
-def create_type_a_post(city, category_info, api_key):
-    """
-    Create a Type A post: Call to list items in an empty category.
-    Records category in posted history on success.
-    """
+def create_type_a_post(market, category_info, api_key):
+    """Create a Type A post: Call to list items in an empty category (national)."""
     category_name = category_info["category"]
     count = category_info.get("count", 0)
 
-    state.add_log(f"Creating Type A post for {city}: {category_name} ({count} listings)")
+    state.add_log(f"Creating Type A post (national): {category_name} ({count} listings)")
 
-    caption = generate_post(post_type="A", city=city, category_or_item=category_name, api_key=api_key)
+    post = generate_post(post_type="A", category_or_item=category_name, api_key=api_key)
+    caption = post.get("full_caption") or post.get("primary_text") or ""
 
     unsplash_key = os.getenv("UNSPLASH_ACCESS_KEY")
     image_path = None
-    image_source = "Unsplash"
 
     if unsplash_key:
         image_path = get_unsplash_image(category_name, unsplash_key)
@@ -355,44 +310,39 @@ def create_type_a_post(city, category_info, api_key):
         state.add_log("No image available. Skipping post.", "ERROR")
         return {"success": False, "message": "No image available"}
 
-    final_caption = caption
-    if image_source == "Unsplash":
-        final_caption += "\n\n📷 Photo: Unsplash"
+    # Pillar 1: ensure high-contrast visuals before publishing.
+    image_path = enhance_image(image_path)
 
-    result = post_to_fb(image_path, final_caption)
+    result = post_to_fb(image_path, caption)
 
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     status = "SUCCESS" if result["success"] else "FAILED"
-    log_to_file(timestamp, city, "Facebook",
+    log_to_file(timestamp, market, "Facebook",
                 f"Type A: {category_name} | {status} | {result.get('post_id', 'N/A')}")
 
     if result["success"]:
         state.posts_today += 1
-        state.city_post_count[city] = state.city_post_count.get(city, 0) + 1
-        mark_as_posted(city, category_name, "A")
+        mark_as_posted(category_name, "A")
         _save_state()
-        state.add_log(f"✅ Posted Type A for {city}: {category_name} (Post ID: {result.get('post_id')})")
+        state.add_log(f"✅ Posted Type A (national): {category_name} (Post ID: {result.get('post_id')})")
     else:
-        state.add_log(f"❌ Failed Type A for {city}: {category_name} - {result.get('message')}", "ERROR")
+        state.add_log(f"❌ Failed Type A: {category_name} - {result.get('message')}", "ERROR")
 
     return result
 
 
-def create_type_b_post(city, listing, api_key):
-    """
-    Create a Type B post: Promote a new listing from eboleka.
-    Records listing title in posted history on success.
-    """
+def create_type_b_post(market, listing, api_key):
+    """Create a Type B post: Promote a new listing from eboleka (national)."""
     title = listing["title"]
     price = listing.get("price", "0")
     url = listing.get("url", "")
 
-    state.add_log(f"Creating Type B post for {city}: {title} (R{price})")
+    state.add_log(f"Creating Type B post (national): {title} (R{price})")
 
-    caption = generate_post(post_type="B", city=city, category_or_item=title, price=price, api_key=api_key)
+    post = generate_post(post_type="B", category_or_item=title, price=price, api_key=api_key)
+    caption = post.get("full_caption") or post.get("primary_text") or ""
 
     image_path = None
-    image_source = "eboleka.co.za"
 
     if url:
         image_path = get_listing_image(url)
@@ -402,56 +352,57 @@ def create_type_b_post(city, listing, api_key):
         if unsplash_key:
             search_term = " ".join(title.split()[:2]) if title else "product"
             image_path = get_unsplash_image(search_term, unsplash_key)
-            image_source = "Unsplash"
 
     if not image_path:
         state.add_log("No image available. Skipping post.", "ERROR")
         return {"success": False, "message": "No image available"}
 
-    final_caption = caption
-    if image_source == "Unsplash":
-        final_caption += "\n\n📷 Photo: Unsplash"
+    # Pillar 1: ensure high-contrast visuals before publishing.
+    image_path = enhance_image(image_path)
 
-    result = post_to_fb(image_path, final_caption)
+    result = post_to_fb(image_path, caption)
 
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     status = "SUCCESS" if result["success"] else "FAILED"
-    log_to_file(timestamp, city, "Facebook",
+    log_to_file(timestamp, market, "Facebook",
                 f"Type B: {title} (R{price}) | {status} | {result.get('post_id', 'N/A')}")
 
     if result["success"]:
         state.posts_today += 1
-        state.city_post_count[city] = state.city_post_count.get(city, 0) + 1
-        mark_as_posted(city, title, "B")
+        mark_as_posted(title, "B")
         _save_state()
-        state.add_log(f"✅ Posted Type B for {city}: {title} (Post ID: {result.get('post_id')})")
+        state.add_log(f"✅ Posted Type B (national): {title} (Post ID: {result.get('post_id')})")
     else:
-        state.add_log(f"❌ Failed Type B for {city}: {title} - {result.get('message')}", "ERROR")
+        state.add_log(f"❌ Failed Type B: {title} - {result.get('message')}", "ERROR")
 
     return result
 
 
-def get_next_city():
-    """
-    Get the next city in rotation, respecting daily limits.
-    Skips cities that have reached their daily max (2 posts).
-    """
-    for _ in range(len(CITIES)):
-        city = CITIES[state.current_city_index]
-        state.current_city_index = (state.current_city_index + 1) % len(CITIES)
-        if state.city_post_count.get(city, 0) < MAX_POSTS_PER_CITY_PER_DAY:
-            return city
+def _create_type_a_attempt(market, api_key):
+    """Fetch categories and attempt one Type A post."""
+    empty_categories = get_empty_categories(market)
+    category_info = _pick_unposted_category(empty_categories)
+    if not category_info:
+        state.add_log("No unposted categories available for Type A.", "WARNING")
+        return {"success": False, "message": "No categories available"}
+    return create_type_a_post(market, category_info, api_key)
 
-    logger.warning("All cities have reached their daily post limit.")
-    return None
+
+def _create_type_b_attempt(market, api_key):
+    """Fetch listings and attempt one Type B post."""
+    listings = get_new_listings(market)
+    listing = _pick_unposted_listing(listings)
+    if not listing:
+        state.add_log("No unposted listings available for Type B.", "WARNING")
+        return {"success": False, "message": "No listings available"}
+    return create_type_b_post(market, listing, api_key)
 
 
 def run_bot_cycle():
     """
-    Main bot cycle: Run a full posting round.
-    Alternates between Type A (call to list) and Type B (new listing) posts.
-    Uses dedup to avoid repeating the same category/item within DEDUP_DAYS.
-    Respects daily limits: max 2 per city, max 20 total.
+    Main bot cycle: creates exactly ONE post per run.
+    The scheduler triggers this 3 times a day (3 posts/day total).
+    Alternates Type A / Type B, falling back to the other type if needed.
     """
     if state.is_running:
         logger.warning("Bot cycle already running. Skipping this round.")
@@ -461,95 +412,49 @@ def run_bot_cycle():
     start_time = datetime.now()
 
     try:
-        state.add_log(f"🚀 Starting bot cycle at {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+        state.add_log(f"🚀 Starting posting cycle at {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
 
-        # Reset daily counts if it's a new day
-        today = datetime.now().date()
-        if state.last_run:
-            last_date = state.last_run.date()
-            if today > last_date:
-                state.reset_daily_counts()
+        # Reset the daily counter if it's a new day.
+        if state.last_run and start_time.date() > state.last_run.date():
+            state.reset_daily_counts()
+
+        if state.posts_today >= MAX_POSTS_PER_DAY:
+            state.add_log(f"✅ Daily limit reached ({MAX_POSTS_PER_DAY} posts). Waiting for the next day.")
+            state.last_run = start_time
+            _save_state()
+            return
 
         deepseek_key = os.getenv("DEEPSEEK_API_KEY")
-        posts_created = 0
-        post_round = 0
-        skipped_categories = 0  # Track how many we skipped due to dedup
 
-        while posts_created < MAX_POSTS_PER_DAY:
-            city = get_next_city()
-            if not city:
-                state.add_log("No more cities available (all at daily limit).")
-                break
+        # Alternate post types across the 3 daily slots.
+        primary_type = "A" if state.posts_today % 2 == 0 else "B"
 
-            if post_round % 2 == 0:
-                # --- Type A: Call to list items ---
-                empty_categories = get_empty_categories(city)
-
-                if empty_categories:
-                    # Pick an unposted category (with dedup check)
-                    category_info = _pick_unposted_category(empty_categories, city)
-                    if category_info:
-                        result = create_type_a_post(city, category_info, deepseek_key)
-                        if result.get("success"):
-                            posts_created += 1
-                        else:
-                            skipped_categories += 1
-                    else:
-                        skipped_categories += 1
-                        state.add_log(f"No unposted categories available for {city}.", "WARNING")
-                else:
-                    state.add_log(f"No empty categories found for {city}, trying Type B instead.")
-                    listings = get_new_listings(city)
-                    if listings:
-                        listing = _pick_unposted_listing(listings, city)
-                        if listing:
-                            result = create_type_b_post(city, listing, deepseek_key)
-                            if result.get("success"):
-                                posts_created += 1
-            else:
-                # --- Type B: Promote new listings ---
-                listings = get_new_listings(city)
-
-                if listings:
-                    listing = _pick_unposted_listing(listings, city)
-                    if listing:
-                        result = create_type_b_post(city, listing, deepseek_key)
-                        if result.get("success"):
-                            posts_created += 1
-                    else:
-                        skipped_categories += 1
-                else:
-                    state.add_log(f"No new listings found for {city}, trying Type A instead.")
-                    empty_categories = get_empty_categories(city)
-                    if empty_categories:
-                        category_info = _pick_unposted_category(empty_categories, city)
-                        if category_info:
-                            result = create_type_a_post(city, category_info, deepseek_key)
-                            if result.get("success"):
-                                posts_created += 1
-
-            post_round += 1
-
-            if skipped_categories >= 9:
-                state.add_log("Too many dedup skips. All 9-city categories likely posted within 3 days.", "WARNING")
-                break
-
-            if posts_created < MAX_POSTS_PER_DAY and post_round < len(CITIES) * 2:
-                time.sleep(2)
+        if primary_type == "B":
+            result = _create_type_b_attempt(MARKET_NAME, deepseek_key)
+            if not (result and result.get("success")):
+                state.add_log("Type B unavailable, falling back to Type A.")
+                result = _create_type_a_attempt(MARKET_NAME, deepseek_key)
+        else:
+            result = _create_type_a_attempt(MARKET_NAME, deepseek_key)
+            if not (result and result.get("success")):
+                state.add_log("Type A unavailable, falling back to Type B.")
+                result = _create_type_b_attempt(MARKET_NAME, deepseek_key)
 
         cleanup_images()
 
-        end_time = datetime.now()
-        duration = (end_time - start_time).total_seconds()
-        state.last_run = end_time
-        _save_state()
-        state.add_log(f"✅ Bot cycle complete. {posts_created} posts in {duration:.1f}s "
-                      f"(skipped {skipped_categories} duplicates)")
+        if result and result.get("success"):
+            state.add_log(f"✅ Cycle complete: 1 post created. Total today: {state.posts_today}/{MAX_POSTS_PER_DAY}")
+        else:
+            msg = result.get("message") if result else "No content available"
+            state.add_log(f"❌ Cycle failed to post: {msg}", "ERROR")
 
     except Exception as e:
         logger.error(f"Bot cycle crashed: {e}", exc_info=True)
         state.add_log(f"❌ Bot cycle error: {e}", "ERROR")
     finally:
+        state.last_run = datetime.now()
+        _save_state()
+        _update_next_run()
         state.is_running = False
 
 
@@ -557,7 +462,6 @@ def scheduled_job():
     """Wrapper for scheduler to run the bot cycle."""
     logger.info("Scheduled job triggered.")
     run_bot_cycle()
-    _update_next_run()
 
 
 def _update_next_run():
@@ -593,7 +497,6 @@ def start_scheduler():
     scheduler_thread.start()
     logger.info("Scheduler started in background thread.")
 
-
 # ---------------------------------------------------------------------------
 # Flask Routes - Web Dashboard
 # ---------------------------------------------------------------------------
@@ -603,12 +506,13 @@ def dashboard():
     """Main dashboard page."""
     return render_template(
         "dashboard.html",
-        cities=CITIES,
+        market=MARKET_NAME,
+        schedule_times=SCHEDULE_TIMES,
+        max_posts_per_day=MAX_POSTS_PER_DAY,
         last_run=state.last_run.strftime("%Y-%m-%d %H:%M:%S") if state.last_run else "Never",
         next_run=state.next_run.strftime("%Y-%m-%d %H:%M:%S") if state.next_run else "Not set",
         is_running=state.is_running,
         posts_today=state.posts_today,
-        city_post_count=state.city_post_count,
         logs=state.run_logs[-50:],
     )
 
@@ -622,10 +526,8 @@ def api_status():
         "is_running": state.is_running,
         "posts_today": state.posts_today,
         "max_posts_today": MAX_POSTS_PER_DAY,
-        "city_post_count": state.city_post_count,
-        "max_per_city": MAX_POSTS_PER_CITY_PER_DAY,
-        "cities": CITIES,
-        "current_city_index": state.current_city_index,
+        "market": MARKET_NAME,
+        "schedule_times": SCHEDULE_TIMES,
     })
 
 
@@ -642,7 +544,7 @@ def api_logs():
 
 @app.route("/api/run", methods=["POST"])
 def api_run_now():
-    """Trigger an immediate bot cycle."""
+    """Trigger an immediate bot cycle (creates one post)."""
     if state.is_running:
         return jsonify({
             "success": False,
@@ -660,44 +562,31 @@ def api_run_now():
 
 @app.route("/api/test-post", methods=["POST"])
 def api_test_post():
-    """Test post for a specific city."""
+    """Test post for the national South Africa market."""
     if state.is_running:
         return jsonify({
             "success": False,
             "message": "Bot cycle is already running. Please wait."
         }), 409
 
-    city = request.form.get("city", "").strip()
-
-    if city not in CITIES:
-        return jsonify({
-            "success": False,
-            "message": f"Invalid city: {city}. Valid cities: {', '.join(CITIES)}"
-        }), 400
-
     def do_test_post():
         state.is_running = True
         try:
-            state.add_log(f"🧪 Test post initiated for {city}...")
+            state.add_log(f"🧪 Test post initiated for national {MARKET_NAME}...")
             deepseek_key = os.getenv("DEEPSEEK_API_KEY")
 
-            listings = get_new_listings(city)
-            if listings:
-                result = create_type_b_post(city, listings[0], deepseek_key)
-            else:
-                empty_categories = get_empty_categories(city)
-                if empty_categories:
-                    result = create_type_a_post(city, empty_categories[0], deepseek_key)
-                else:
-                    state.add_log("No listings or categories found for test post.", "ERROR")
-                    result = {"success": False, "message": "No content available"}
+            result = _create_type_b_attempt(MARKET_NAME, deepseek_key)
+            if not (result and result.get("success")):
+                state.add_log("Type B unavailable for test, trying Type A.")
+                result = _create_type_a_attempt(MARKET_NAME, deepseek_key)
 
             cleanup_images()
 
-            if result.get("success"):
-                state.add_log(f"✅ Test post successful for {city}! Posted to Facebook. Instagram will auto-sync.")
+            if result and result.get("success"):
+                state.add_log(f"✅ Test post successful for national {MARKET_NAME}! Posted to E-BOLEKA Facebook Page.")
             else:
-                state.add_log(f"❌ Test post failed: {result.get('message')}", "ERROR")
+                msg = result.get("message") if result else "No content available"
+                state.add_log(f"❌ Test post failed: {msg}", "ERROR")
         except Exception as e:
             state.add_log(f"❌ Test post error: {e}", "ERROR")
         finally:
@@ -708,7 +597,7 @@ def api_test_post():
 
     return jsonify({
         "success": True,
-        "message": f"Test post initiated for {city}. Posted to Facebook. Instagram will auto-sync."
+        "message": f"Test post initiated for national {MARKET_NAME}."
     })
 
 
@@ -722,46 +611,59 @@ def api_clear_logs():
 
 @app.route("/api/reset-daily", methods=["POST"])
 def api_reset_daily():
-    """Manually reset daily post counters."""
+    """Manually reset the daily post counter."""
     state.reset_daily_counts()
-    state.add_log("🔄 Daily post counters manually reset.")
-    return jsonify({"success": True, "message": "Daily counts reset."})
+    state.add_log("🔄 Daily post counter manually reset.")
+    return jsonify({"success": True, "message": "Daily count reset."})
 
 
 # ---------------------------------------------------------------------------
 # Application Entry Point
 # ---------------------------------------------------------------------------
 
-if __name__ == "__main__":
-    # Verify required environment variables
-    required_vars = [
-        "DEEPSEEK_API_KEY",
-        "FB_PAGE_ACCESS_TOKEN",
-        "FB_PAGE_ID",
-        "UNSPLASH_ACCESS_KEY",
-    ]
+_WSGI_SCHEDULER_STARTED = False
 
-    missing = [var for var in required_vars if not os.getenv(var)]
 
-    if missing:
-        logger.warning(f"Missing environment variables: {', '.join(missing)}")
-        logger.warning("The bot will run but some features may not work.")
-        logger.warning("Copy .env.example to .env and fill in your values.")
+def _start_wsgi_scheduler():
+    """Start the scheduler on module import (works under gunicorn too)."""
+    global _WSGI_SCHEDULER_STARTED
+    if _WSGI_SCHEDULER_STARTED:
+        return
+    _WSGI_SCHEDULER_STARTED = True
 
-    # Restore state from previous run (survives Render sleep)
     _load_state()
-
-    logger.info("=" * 60)
-    logger.info("Boleka SA Marketplace Bot v1.0 Starting...")
-    logger.info(f"Cities: {', '.join(CITIES)}")
-    logger.info(f"Schedule: {', '.join(SCHEDULE_TIMES)} SAST daily")
-    logger.info(f"Max posts/day: {MAX_POSTS_PER_DAY} | Max per city: {MAX_POSTS_PER_CITY_PER_DAY}")
-    logger.info(f"Dedup: {DEDUP_DAYS} days | Platform: Facebook (Instagram auto-sync)")
-    logger.info("=" * 60)
-
     start_scheduler()
     _update_next_run()
 
+    logger.info("=" * 60)
+    logger.info("E-BOLEKA Marketplace Bot v2.0 Starting...")
+    logger.info(f"Market: {MARKET_NAME} (national - single market, no city segmentation)")
+    logger.info(f"Schedule: {', '.join(SCHEDULE_TIMES)} SAST daily")
+    logger.info(f"Max posts/day: {MAX_POSTS_PER_DAY}")
+    logger.info(f"Dedup: {DEDUP_DAYS} days | Platform: Facebook Page (Meta system user)")
+    logger.info("=" * 60)
+
+
+_start_wsgi_scheduler()
+
+
+if __name__ == "__main__":
+    # Verify required environment variables.
+    token_vars = ["FB_SYSTEM_USER_ACCESS_TOKEN", "META_SYSTEM_USER_TOKEN", "FB_PAGE_ACCESS_TOKEN"]
+    has_token = any(os.getenv(v) for v in token_vars)
+
+    missing = []
+    if not has_token:
+        missing.append("FB_SYSTEM_USER_ACCESS_TOKEN (or META_SYSTEM_USER_TOKEN)")
+    if not os.getenv("FB_PAGE_ID"):
+        missing.append("FB_PAGE_ID")
+
+    if missing:
+        logger.warning(f"Missing environment variables: {', '.join(missing)}")
+        logger.warning("The bot will run but posting may fail until these are set.")
+        logger.warning("Copy .env.example to .env and fill in your values.")
+
+    # The scheduler is already running (started on import above).
     port = int(os.getenv("PORT", 5000))
     debug = os.getenv("FLASK_DEBUG", "false").lower() == "true"
 

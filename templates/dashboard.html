@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Boleka SA Marketplace Bot v1.0</title>
+    <title>E-BOLEKA Marketplace Bot</title>
     <style>
         * {
             margin: 0;
@@ -382,8 +382,8 @@
     <div class="container">
         <!-- Header -->
         <div class="header">
-            <h1>🇿🇦 Boleka SA Marketplace Bot</h1>
-            <div class="subtitle">v1.0 — Facebook + Instagram Auto-Sync</div>
+            <h1>🇿🇦 E-BOLEKA Marketplace Bot</h1>
+            <div class="subtitle">v2.0 — 3 posts/day · National South Africa</div>
             <span class="badge" id="statusBadge">
                 <span class="status-dot idle" id="statusDot"></span>
                 <span id="statusText">Idle</span>
@@ -415,19 +415,15 @@
             </div>
         </div>
 
-        <!-- City Post Counts -->
+        <!-- National Targeting -->
         <div class="card">
-            <h3>🏙️ City Post Counts (Max 2/city)</h3>
-            <div class="city-list" id="cityList">
-                {% for city in cities %}
-                <div class="city-item">
-                    <span>{{ city }}</span>
-                    <span class="count {% if city_post_count.get(city, 0) == 0 %}ok{% elif city_post_count.get(city, 0) < 2 %}warn{% else %}max{% endif %}" id="count-{{ city|replace(' ', '') }}">
-                        {{ city_post_count.get(city, 0) }}
-                    </span>
-                </div>
-                {% endfor %}
-            </div>
+            <h3>🎯 Targeting</h3>
+            <div class="section-label">Market</div>
+            <div class="section-value" style="margin-bottom: 12px;">{{ market }} — national audience (single market, no city segmentation)</div>
+            <div class="section-label">Schedule</div>
+            <div class="section-value" style="margin-bottom: 12px;">{{ schedule_times | join(' · ') }} SAST daily</div>
+            <div class="section-label">Daily Limit</div>
+            <div class="section-value">{{ max_posts_per_day }} posts/day</div>
         </div>
 
         <!-- Controls -->
@@ -445,18 +441,12 @@
                 </button>
             </div>
             <div class="form-group">
-                <select id="citySelect">
-                    <option value="">Select a city for test post...</option>
-                    {% for city in cities %}
-                    <option value="{{ city }}">{{ city }}</option>
-                    {% endfor %}
-                </select>
                 <button class="btn btn-secondary" id="btnTestPost" onclick="testPost()">
-                    🧪 Test Post
+                    🧪 Test Post (National)
                 </button>
             </div>
             <div id="testPostMsg" style="margin-top: 10px; font-size: 0.85rem; color: #7b61ff; display: none;">
-                ✅ Posted to Facebook. Instagram will auto-sync.
+                ✅ Posted to E-BOLEKA Facebook Page.
             </div>
         </div>
 
@@ -482,8 +472,8 @@
 
         <!-- Footer -->
         <div class="footer">
-            Boleka SA Marketplace Bot v1.0 | Posts to Facebook → Instagram auto-syncs via Account Center<br>
-            Schedule: 08:00 · 12:00 · 16:00 · 20:00 SAST | Max 20 posts/day
+            E-BOLEKA Marketplace Bot v2.0 | Posts directly to the E-BOLEKA Facebook Page<br>
+            Schedule: 08:00 · 13:00 · 18:00 SAST | 3 posts/day · National South Africa
         </div>
     </div>
 
@@ -553,16 +543,6 @@
                         d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
                 }
 
-                // Update city counts
-                if (data.city_post_count) {
-                    for (const [city, count] of Object.entries(data.city_post_count)) {
-                        const el = document.getElementById('count-' + city.replace(/\s/g, ''));
-                        if (el) {
-                            el.textContent = count;
-                            el.className = 'count ' + (count === 0 ? 'ok' : count < 2 ? 'warn' : 'max');
-                        }
-                    }
-                }
             } catch (err) {
                 console.error('Status refresh error:', err);
             }
@@ -613,29 +593,18 @@
         }
 
         async function testPost() {
-            const city = document.getElementById('citySelect').value;
-            if (!city) {
-                showToast('⚠️ Please select a city first.', 'error');
-                return;
-            }
-
             setButtonsDisabled(true);
             const msgEl = document.getElementById('testPostMsg');
             msgEl.style.display = 'block';
-            msgEl.textContent = '⏳ Running test post for ' + city + '...';
+            msgEl.textContent = '⏳ Running national test post...';
 
             try {
-                const formData = new FormData();
-                formData.append('city', city);
-                const resp = await fetch('/api/test-post', {
-                    method: 'POST',
-                    body: formData
-                });
+                const resp = await fetch('/api/test-post', { method: 'POST' });
                 const data = await resp.json();
                 if (data.success) {
-                    msgEl.textContent = '✅ Posted to Facebook. Instagram will auto-sync.';
+                    msgEl.textContent = '✅ Posted to E-BOLEKA Facebook Page.';
                     msgEl.style.color = '#00d4aa';
-                    showToast('✅ Test post sent for ' + city + '! Instagram will auto-sync.', 'success');
+                    showToast('✅ National test post sent!', 'success');
                 } else {
                     msgEl.textContent = '❌ ' + data.message;
                     msgEl.style.color = '#ff4757';
@@ -651,7 +620,7 @@
         }
 
         async function resetDaily() {
-            if (!confirm('Reset daily post counts? This will allow posting to all cities again.')) return;
+            if (!confirm('Reset the daily post counter? This will allow up to 3 more posts today.')) return;
 
             try {
                 const resp = await fetch('/api/reset-daily', { method: 'POST' });

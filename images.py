@@ -7,7 +7,7 @@ Rule: Never use Pinterest or Google Images. Only Unsplash, Pexels, or eboleka.co
 import os
 import requests
 import logging
-from PIL import Image
+from PIL import Image, ImageEnhance
 from io import BytesIO
 
 # Configure logging
@@ -203,6 +203,26 @@ def get_unsplash_image(search_term, unsplash_access_key):
     except Exception as e:
         logger.error(f"Error downloading Unsplash image for '{search_term}': {e}")
         return None
+
+
+def enhance_image(image_path, contrast=1.15, color=1.12, sharpness=1.1):
+    """
+    Pillar 1 - high-contrast visuals.
+
+    Boost contrast, colour and sharpness of the image before posting so the
+    visual stands out in the Facebook feed. Returns the (possibly enhanced)
+    image path; on any failure it returns the original path unchanged.
+    """
+    try:
+        img = Image.open(image_path).convert("RGB")
+        img = ImageEnhance.Contrast(img).enhance(contrast)
+        img = ImageEnhance.Color(img).enhance(color)
+        img = ImageEnhance.Sharpness(img).enhance(sharpness)
+        img.save(image_path, "JPEG", quality=90, optimize=True)
+        logger.info(f"Enhanced image contrast: {image_path}")
+    except Exception as e:
+        logger.warning(f"Could not enhance image {image_path}: {e}")
+    return image_path
 
 
 def cleanup_images():

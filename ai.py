@@ -1,325 +1,296 @@
 """
-ai.py - AI Post Generator for Boleka SA Marketplace Bot v1.0
-Uses DeepSeek API (deepseek-chat v4 pro) to generate SA-flavored social media captions.
-Tone: South African, friendly, money-making, with emojis + hashtags.
+ai.py - AI Post Generator for E-BOLEKA Marketplace Bot v2.0
+
+Uses DeepSeek (deepseek-chat) to generate high-converting South African
+Facebook posts that follow the E-BOLEKA ad framework:
+
+  - Primary Text: hook + pain point + solution
+  - Headline: bold CTA / value highlight
+  - Description: clarifying subtext (with before/after where relevant)
+  - OFFER: incentive / discount / direct action prompt
+
+Targets a NATIONAL South Africa audience (single market - no city segmentation).
 """
 
 import os
+import re
+import json
 import logging
+import hashlib
 from openai import OpenAI
 
-# Configure logging
 logger = logging.getLogger(__name__)
 
-# DeepSeek API configuration
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEEPSEEK_MODEL = "deepseek-chat"
 
+# Single national market - never segment by city/township.
+MARKET = "South Africa"
+
+STRUCTURE_GUIDE = (
+    "Return ONLY valid JSON with exactly these keys:\n"
+    "{\n"
+    '  "headline": "a bold, punchy, ALL-CAPS call-to-action or value highlight (5-12 words)",\n'
+    '  "primary_text": "a compelling hook that names a specific pain point and introduces '
+    'the solution immediately (2-4 sentences, warm SA tone)",\n'
+    '  "description": "a short clarifying subtext expanding the benefit, including a '
+    'before/after or side-by-side comparison where relevant",\n'
+    '  "offer": "a clear OFFER with an incentive, discount or direct action prompt",\n'
+    '  "hashtags": "#EBOLEKA #SouthAfrica plus 3-5 relevant topic hashtags"\n'
+    "}\n"
+)
+
 
 def _get_client(api_key):
-    """
-    Create and return an OpenAI-compatible client configured for DeepSeek.
-    
-    Args:
-        api_key: DeepSeek API key.
-    
-    Returns:
-        OpenAI client instance.
-    """
-    return OpenAI(
-        api_key=api_key,
-        base_url=DEEPSEEK_BASE_URL,
+    return OpenAI(api_key=api_key, base_url=DEEPSEEK_BASE_URL)
+
+
+def _build_prompt(post_type, category_or_item, price):
+    price_display = f"R{price}" if price else None
+
+    system_prompt = (
+        "You are a high-converting South African social media copywriter for E-BOLEKA "
+        "(eboleka.co.za), a national marketplace where anyone in South Africa can list items "
+        "for FREE to rent or sell. Target a NATIONAL South Africa audience - never mention "
+        "specific cities, provinces or townships. Use warm, confident, money-motivated SA slang "
+        "(howzit, yebo, lekker, shap shap) but keep it natural.\n\n"
+        + STRUCTURE_GUIDE
+        + "\nThe 4 pillars EVERY post must satisfy:\n"
+        "1. High-contrast, clean visual energy (bold, clear, scannable tone).\n"
+        "2. A clear value proposition that shows instant utility.\n"
+        "3. A before/after or side-by-side comparison where relevant.\n"
+        "4. An OFFER - a clear incentive, discount or direct action prompt.\n"
+        "Keep the whole post under 150 words."
     )
 
+    if post_type in ("A", "CALL_TO_LIST"):
+        user_prompt = (
+            f"Write a Facebook post calling on people ACROSS SOUTH AFRICA who have "
+            f"'{category_or_item}' items to list them for FREE on E-BOLEKA and start making "
+            f"money. Category: {category_or_item}.\n\n"
+            "Open the primary_text with a sharp pain point (unused items gathering dust, missed "
+            "income, rental chaos, cash sitting idle) and introduce E-BOLEKA as the instant "
+            "solution. Make the offer a clear incentive (list FREE today, keep 100% of your "
+            "earnings, no listing fees)."
+        )
+    else:
+        user_prompt = (
+            f"Write a Facebook post promoting a NEW listing on E-BOLEKA (eboleka.co.za) to a "
+            f"NATIONAL South Africa audience.\n"
+            f"Item: {category_or_item}\n"
+            f"Price: {price_display or 'Ask for price'}\n\n"
+            "Open the primary_text with a hook about a specific problem (endless searching, "
+            "overpaying, missing out on deals) and present this item as the solution. Make the "
+            "offer a direct action (DM to secure, limited availability, buy before it's gone)."
+        )
 
-def generate_post(post_type, city, category_or_item, price=None, api_key=None):
+    return system_prompt, user_prompt
+
+
+def _compose_caption(structured):
+    parts = []
+    if structured.get("headline"):
+        parts.append(f"🔥 {structured['headline']}")
+    if structured.get("primary_text"):
+        parts.append(structured["primary_text"])
+    if structured.get("description"):
+        parts.append(structured["description"])
+    if structured.get("offer"):
+        parts.append(f"🎁 {structured['offer']}")
+    parts.append("👉 eboleka.co.za")
+    if structured.get("hashtags"):
+        parts.append(structured["hashtags"])
+    return "\n\n".join(parts)
+
+
+def _parse_ai_response(content):
+    data = {}
+    try:
+        data = json.loads(content)
+    except (json.JSONDecodeError, TypeError):
+        match = re.search(r"\{.*\}", content, re.DOTALL)
+        if match:
+            try:
+                data = json.loads(match.group(0))
+            except (json.JSONDecodeError, TypeError):
+                data = {}
+
+    def _get(*keys):
+        for key in keys:
+            val = data.get(key)
+            if val:
+                return str(val).strip()
+        return ""
+
+    return {
+        "headline": _get("headline"),
+        "primary_text": _get("primary_text", "primaryText", "primary"),
+        "description": _get("description"),
+        "offer": _get("offer"),
+        "hashtags": _get("hashtags"),
+    }
+
+
+def generate_post(post_type, category_or_item, price=None, market=MARKET, api_key=None):
     """
-    Generate a South African social media post using DeepSeek AI.
-    
-    Post Type A (call_to_list): "Who in [CITY] has [CATEGORY] to rent/sell?
-                                 List FREE on Boleka.co.za and make money this week 💰"
-    
-    Post Type B (new_listing): "NEW in [CITY]: [ITEM NAME] for R[PRICE] on Boleka.co.za.
-                                DM to buy."
-    
+    Generate a structured E-BOLEKA Facebook post using DeepSeek AI.
+
     Args:
-        post_type: "A" or "call_to_list" for Type A, "B" or "new_listing" for Type B.
-        city: City name (e.g., "Johannesburg").
+        post_type: "A"/"call_to_list" or "B"/"new_listing".
         category_or_item: Category name (Type A) or item title (Type B).
-        price: Item price (only for Type B).
-        api_key: DeepSeek API key (if not provided, reads from env).
-    
+        price: Item price (Type B only).
+        market: Target market (defaults to national South Africa).
+        api_key: DeepSeek API key (defaults to env).
+
     Returns:
-        str: The generated post caption with hashtags, or a fallback if AI fails.
+        dict with keys: headline, primary_text, description, offer, hashtags, full_caption.
     """
-    # Get API key from parameter or environment
     if not api_key:
         api_key = os.getenv("DEEPSEEK_API_KEY")
-    
+
     if not api_key:
         logger.warning("No DeepSeek API key found. Using fallback post generator.")
-        return _generate_fallback_post(post_type, city, category_or_item, price)
-    
+        return _generate_fallback_post(post_type, category_or_item, price, market)
+
+    post_type_normalized = post_type.upper() if isinstance(post_type, str) else "A"
+
     try:
         client = _get_client(api_key)
-        
-        # Build the prompt based on post type
-        post_type_normalized = post_type.upper() if isinstance(post_type, str) else "A"
-        
-        if post_type_normalized in ("A", "CALL_TO_LIST"):
-            system_prompt = (
-                "You are a friendly, persuasive South African social media manager for Boleka.co.za, "
-                "an online marketplace where people can list items for free to rent or sell. "
-                "Your tone is warm, enthusiastic, and money-motivated - like a savvy friend "
-                "sharing a business tip. Use South African slang naturally (e.g., 'howzit', 'yebo', "
-                "'lekker', 'shap shap') but don't overdo it. "
-                "Always include emojis (💰, 📦, 🏠, 🎉, etc.) and relevant hashtags."
-            )
-            
-            user_prompt = (
-                f"Write a short, punchy social media post (2-3 sentences max) asking people in "
-                f"{city}, South Africa who have '{category_or_item}' items to list them for FREE "
-                f"on Boleka.co.za and make money this week.\n\n"
-                f"Requirements:\n"
-                f"- Must mention '{city}' and '{category_or_item}'\n"
-                f"- Must mention 'Boleka.co.za' and that listing is FREE\n"
-                f"- Use money-making angle (earn extra cash, side hustle, etc.)\n"
-                f"- Include 2-3 relevant emojis\n"
-                f"- Do NOT include 'Photo:' or image credits - those are added separately\n"
-                f"- End with exactly these hashtags on one line: #{city.replace(' ', '')} "
-                f"#Boleka #{category_or_item.replace(' ', '')} #Rent #Sell #MakeMoney "
-                f"#RentalBusiness #SouthAfrica\n"
-                f"- Keep it under 150 words"
-            )
-        
-        else:  # Type B: New listing promotion
-            price_display = f"R{price}" if price else "R???"
-            
-            system_prompt = (
-                "You are a friendly, persuasive South African social media manager for Boleka.co.za, "
-                "an online marketplace where people buy, sell, and rent items. "
-                "Your tone is excited and urgent - like announcing a hot new deal. "
-                "Use South African slang naturally (e.g., 'howzit', 'yebo', "
-                "'lekker', 'shap shap') but don't overdo it. "
-                "Always include emojis and relevant hashtags."
-            )
-            
-            user_prompt = (
-                f"Write a short, exciting social media post (2-3 sentences max) announcing a "
-                f"NEW listing on Boleka.co.za in {city}, South Africa.\n\n"
-                f"Item: {category_or_item}\n"
-                f"Price: {price_display}\n\n"
-                f"Requirements:\n"
-                f"- Must mention the item '{category_or_item}' and city '{city}'\n"
-                f"- Must mention the price ({price_display})\n"
-                f"- Must mention 'Boleka.co.za'\n"
-                f"- Encourage people to DM/comment to buy or check the link\n"
-                f"- Include 2-3 relevant emojis\n"
-                f"- Do NOT include 'Photo:' or image credits - those are added separately\n"
-                f"- End with exactly these hashtags on one line: #{city.replace(' ', '')} "
-                f"#Boleka #{category_or_item.replace(' ', '')[:20]} #ForSale #BuyNow "
-                f"#SouthAfrica\n"
-                f"- Keep it under 150 words"
-            )
-        
-        # Call DeepSeek API
+        system_prompt, user_prompt = _build_prompt(post_type_normalized, category_or_item, price)
+
         response = client.chat.completions.create(
             model=DEEPSEEK_MODEL,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            max_tokens=300,
-            temperature=0.8,
+            max_tokens=600,
+            temperature=0.85,
             top_p=0.9,
+            response_format={"type": "json_object"},
         )
-        
-        caption = response.choices[0].message.content.strip()
-        logger.info(f"AI generated post for {city} (Type {post_type_normalized})")
-        return caption
-        
+
+        content = response.choices[0].message.content.strip()
+        structured = _parse_ai_response(content)
+
+        if not (structured["headline"] and structured["primary_text"] and structured["offer"]):
+            logger.warning("AI returned incomplete structure; using fallback post generator.")
+            return _generate_fallback_post(post_type, category_or_item, price, market)
+
+        structured["full_caption"] = _compose_caption(structured)
+        logger.info(f"AI generated structured post (Type {post_type_normalized})")
+        return structured
+
     except Exception as e:
         logger.error(f"DeepSeek API error: {e}. Using fallback post generator.")
-        return _generate_fallback_post(post_type, city, category_or_item, price)
+        return _generate_fallback_post(post_type, category_or_item, price, market)
 
 
-def _generate_fallback_post(post_type, city, category_or_item, price=None):
-    """
-    Generate a fallback post without AI when the DeepSeek API is unavailable.
-    These are hardcoded templates that maintain the SA tone.
-    Uses 10 Type A templates and 6 Type B templates for variety.
-    
-    Args:
-        post_type: "A" or "B".
-        city: City name.
-        category_or_item: Category or item name.
-        price: Item price (Type B only).
-    
-    Returns:
-        str: Fallback post caption.
-    """
-    import hashlib
-    
+def _generate_fallback_post(post_type, category_or_item, price=None, market=MARKET):
+    """Hardcoded structured templates used when DeepSeek is unavailable."""
     post_type_normalized = post_type.upper() if isinstance(post_type, str) else "A"
-    city_hashtag = city.replace(" ", "")
-    item_hashtag = category_or_item.replace(" ", "")[:20]
-    
+    item = (category_or_item or "your gear").strip()
+    cleaned = "".join(ch for ch in item.title().replace(" & ", " ").replace("'", "") if ch.isalnum())
+    item_hashtag = cleaned[:20] or "Marketplace"
+    price_display = f"R{price}" if price else None
+
     if post_type_normalized in ("A", "CALL_TO_LIST"):
-        # Type A: Call to list items (10 templates)
         templates = [
-            (
-                f"📢 Who in {city} has {category_or_item} to rent or sell? 💰\n\n"
-                f"List it for FREE on Boleka.co.za and start making money this week! "
-                f"Your side hustle starts here 🚀\n\n"
-                f"👉 eboleka.co.za\n\n"
-                f"#{city_hashtag} #Boleka #{item_hashtag} #Rent #Sell #MakeMoney "
-                f"#RentalBusiness #SouthAfrica"
-            ),
-            (
-                f"💡 Got {category_or_item} lying around in {city}?\n\n"
-                f"Turn it into CASH! List FREE on Boleka.co.za and earn extra money "
-                f"this month. It's quick, it's easy, and it's FREE! 💸\n\n"
-                f"👉 eboleka.co.za\n\n"
-                f"#{city_hashtag} #Boleka #{item_hashtag} #Rent #Sell #MakeMoney "
-                f"#RentalBusiness #SouthAfrica"
-            ),
-            (
-                f"🔔 Calling all {city} hustlers!\n\n"
-                f"Do you have {category_or_item}? List it FREE on Boleka.co.za "
-                f"and watch the money roll in! Don't let your stuff collect dust - "
-                f"let it make you money! 💰🔥\n\n"
-                f"👉 eboleka.co.za\n\n"
-                f"#{city_hashtag} #Boleka #{item_hashtag} #Rent #Sell #MakeMoney "
-                f"#RentalBusiness #SouthAfrica"
-            ),
-            (
-                f"🇿🇦 {city}, turn your {category_or_item} into income! 💸\n\n"
-                f"Boleka.co.za lets you list for FREE — no fees, no catches. "
-                f"Just post your item and start earning. Simple! 🎯\n\n"
-                f"👉 eboleka.co.za\n\n"
-                f"#{city_hashtag} #Boleka #{item_hashtag} #Rent #Sell #MakeMoney "
-                f"#RentalBusiness #SouthAfrica"
-            ),
-            (
-                f"🤔 Why let your {category_or_item} sit unused, {city}?\n\n"
-                f"Rent it out or sell it on Boleka.co.za! Listing is 100% FREE "
-                f"and you could be making money by tomorrow. Yebo! 🙌\n\n"
-                f"👉 eboleka.co.za\n\n"
-                f"#{city_hashtag} #Boleka #{item_hashtag} #Rent #Sell #MakeMoney "
-                f"#RentalBusiness #SouthAfrica"
-            ),
-            (
-                f"💼 Side hustle alert for {city}! 🔔\n\n"
-                f"Have {category_or_item}? List them FREE on Boleka.co.za "
-                f"and build your rental business today. Every item could "
-                f"be extra income in your pocket! 💰\n\n"
-                f"👉 eboleka.co.za\n\n"
-                f"#{city_hashtag} #Boleka #{item_hashtag} #Rent #Sell #MakeMoney "
-                f"#RentalBusiness #SouthAfrica"
-            ),
-            (
-                f"📦 {city}, don't let your {category_or_item} gather dust!\n\n"
-                f"Someone out there needs what you have. List FREE on "
-                f"Boleka.co.za and connect with buyers & renters today. "
-                f"Make your stuff work for YOU! 💪\n\n"
-                f"👉 eboleka.co.za\n\n"
-                f"#{city_hashtag} #Boleka #{item_hashtag} #Rent #Sell #MakeMoney "
-                f"#RentalBusiness #SouthAfrica"
-            ),
-            (
-                f"🎯 Target: Extra cash this month, {city}!\n\n"
-                f"Your {category_or_item} could be earning you money right now. "
-                f"Free listing on Boleka.co.za — no risk, all reward. "
-                f"Shap shap! 💸🔥\n\n"
-                f"👉 eboleka.co.za\n\n"
-                f"#{city_hashtag} #Boleka #{item_hashtag} #Rent #Sell #MakeMoney "
-                f"#RentalBusiness #SouthAfrica"
-            ),
-            (
-                f"🏠 {city} — ever thought of renting out your {category_or_item}?\n\n"
-                f"Boleka.co.za makes it easy and FREE to list. From "
-                f"weekend rentals to outright sales, earn on your terms. "
-                f"Start today! 🚀\n\n"
-                f"👉 eboleka.co.za\n\n"
-                f"#{city_hashtag} #Boleka #{item_hashtag} #Rent #Sell #MakeMoney "
-                f"#RentalBusiness #SouthAfrica"
-            ),
-            (
-                f"✨ New week, new income stream for {city}!\n\n"
-                f"List your {category_or_item} for FREE on Boleka.co.za. "
-                f"It takes 2 minutes and could put Rands in your pocket by tonight. "
-                f"Come on, what are you waiting for? 💰🇿🇦\n\n"
-                f"👉 eboleka.co.za\n\n"
-                f"#{city_hashtag} #Boleka #{item_hashtag} #Rent #Sell #MakeMoney "
-                f"#RentalBusiness #SouthAfrica"
-            ),
+            {
+                "headline": "STOP LETTING YOUR STUFF COLLECT DUST - EARN TODAY",
+                "primary_text": (
+                    f"Still storing {item.lower()} you barely use while cash is tight? "
+                    "Every unused item is money sitting idle in your home. E-BOLEKA turns that "
+                    "clutter into income in minutes."
+                ),
+                "description": (
+                    f"❌ Before: {item} gathering dust and losing value. "
+                    "✅ After: listed FREE on E-BOLEKA and earning Rands by tonight."
+                ),
+                "offer": "List FREE today on E-BOLEKA - no listing fees and you keep 100% of your earnings.",
+                "hashtags": f"#EBOLEKA #{item_hashtag} #Rent #Sell #MakeMoney #SideHustle #SouthAfrica",
+            },
+            {
+                "headline": "TURN IDLE ITEMS INTO INSTANT CASH",
+                "primary_text": (
+                    f"Rental and resale chaos ends now. Got {item.lower()}? Stop letting it sit "
+                    "unused while someone out there is ready to pay for it. E-BOLEKA connects you "
+                    "to buyers and renters across South Africa in seconds."
+                ),
+                "description": (
+                    "❌ Before: months of nothing. ✅ After: live listing in 2 minutes, "
+                    "inquiries the same day."
+                ),
+                "offer": "Sign up now and list your first item 100% FREE - no fees, no catches.",
+                "hashtags": f"#EBOLEKA #{item_hashtag} #ListFree #RentalBusiness #EarnExtra #SouthAfrica",
+            },
+            {
+                "headline": "YOUR SIDE HUSTLE STARTS IN 2 MINUTES",
+                "primary_text": (
+                    f"Feeling the squeeze? Your {item.lower()} could be earning for you while you "
+                    "sleep. E-BOLEKA makes listing simple, fast and free - no complicated setup, "
+                    "just instant reach nationwide."
+                ),
+                "description": (
+                    "❌ Before: extra cash feels out of reach. ✅ After: your item listed on "
+                    "E-BOLEKA and working for you from day one."
+                ),
+                "offer": "List FREE on E-BOLEKA today and unlock a brand-new income stream this week.",
+                "hashtags": f"#EBOLEKA #{item_hashtag} #HustleSmart #MakeMoney #SellOnline #SouthAfrica",
+            },
         ]
     else:
-        # Type B: New listing promotion (6 templates)
-        price_display = f"R{price}" if price else "R???"
         templates = [
-            (
-                f"🆕 NEW in {city}!\n\n"
-                f"🔥 {category_or_item} - {price_display}\n\n"
-                f"Available now on Boleka.co.za! DM to buy or check the link below. "
-                f"First come, first served! 🏃‍♂️💨\n\n"
-                f"👉 eboleka.co.za\n\n"
-                f"#{city_hashtag} #Boleka #{item_hashtag} #ForSale #BuyNow "
-                f"#SouthAfrica"
-            ),
-            (
-                f"📍 Hot deal in {city}! 🔥\n\n"
-                f"{category_or_item} for just {price_display} on Boleka.co.za!\n\n"
-                f"Don't miss out - grab this deal before it's gone. "
-                f"DM or comment to secure yours! 💰\n\n"
-                f"👉 eboleka.co.za\n\n"
-                f"#{city_hashtag} #Boleka #{item_hashtag} #ForSale #BuyNow "
-                f"#SouthAfrica"
-            ),
-            (
-                f"🚨 Just listed in {city}! 🇿🇦\n\n"
-                f"✨ {category_or_item} — {price_display} ✨\n\n"
-                f"This one won't last long on Boleka.co.za. DM or comment "
-                f"'SOLD' to grab it now! Fast, safe, local. 🎯\n\n"
-                f"👉 eboleka.co.za\n\n"
-                f"#{city_hashtag} #Boleka #{item_hashtag} #ForSale #BuyNow "
-                f"#SouthAfrica"
-            ),
-            (
-                f"💎 Check this out, {city}!\n\n"
-                f"{category_or_item} — {price_display}\n\n"
-                f"Fresh on Boleka.co.za and ready for a new owner. "
-                f"Message us to arrange pickup or delivery. "
-                f"You snooze, you lose! 😴💨\n\n"
-                f"👉 eboleka.co.za\n\n"
-                f"#{city_hashtag} #Boleka #{item_hashtag} #ForSale #BuyNow "
-                f"#SouthAfrica"
-            ),
-            (
-                f"🏷️ PRICE DROP in {city}!\n\n"
-                f"📦 {category_or_item}\n"
-                f"💰 {price_display}\n\n"
-                f"Get it now on Boleka.co.za before someone else does! "
-                f"DM to make an offer. We deliver too! 🚚\n\n"
-                f"👉 eboleka.co.za\n\n"
-                f"#{city_hashtag} #Boleka #{item_hashtag} #ForSale #BuyNow "
-                f"#SouthAfrica"
-            ),
-            (
-                f"👀 Look what just hit Boleka.co.za in {city}!\n\n"
-                f"🎯 {category_or_item}\n"
-                f"💵 {price_display}\n\n"
-                f"Quality item, great price, local seller. DM to chat or "
-                f"click the link to buy direct. #SupportLocal 🇿🇦\n\n"
-                f"👉 eboleka.co.za\n\n"
-                f"#{city_hashtag} #Boleka #{item_hashtag} #ForSale #BuyNow "
-                f"#SouthAfrica"
-            ),
+            {
+                "headline": "HOT FIND - GRAB IT BEFORE IT'S GONE",
+                "primary_text": (
+                    f"Tired of endless searching and overpaying? We just found it for you: "
+                    f"{item}" + (f" for {price_display}" if price_display else "") +
+                    ". Fresh on E-BOLEKA and ready for a new owner right now."
+                ),
+                "description": (
+                    "❌ Before: hunting across sites with no luck. ✅ After: this deal found, "
+                    "priced right, and one message away."
+                ),
+                "offer": "DM now to secure it - first come, first served. Limited stock, don't snooze.",
+                "hashtags": f"#EBOLEKA #{item_hashtag} #ForSale #BuyNow #DealAlert #SouthAfrica",
+            },
+            {
+                "headline": "NEW LISTING, NEW DEAL, DON'T MISS OUT",
+                "primary_text": (
+                    f"Howzit, South Africa! Check this {item.lower()} just listed on E-BOLEKA"
+                    + (f" for {price_display}" if price_display else "") +
+                    ". Quality item, fair price, local seller - exactly what you've been looking for."
+                ),
+                "description": (
+                    "❌ Before: searching and settling for less. ✅ After: found it here, "
+                    "fast, safe and local."
+                ),
+                "offer": "Message now to secure yours - this one won't last long on E-BOLEKA.",
+                "hashtags": f"#EBOLEKA #{item_hashtag} #SupportLocal #ForSale #BuyNow #SouthAfrica",
+            },
+            {
+                "headline": "THE DEAL YOU'VE BEEN WAITING FOR",
+                "primary_text": (
+                    f"Stop scrolling. This {item.lower()}"
+                    + (f" is going for {price_display}" if price_display else " is available now") +
+                    " on E-BOLEKA and the seller is ready to deal. Skip the hassle and get straight "
+                    "to the good stuff."
+                ),
+                "description": (
+                    "❌ Before: wasted time, missed deals. ✅ After: quality item, "
+                    "clear price, direct access."
+                ),
+                "offer": "DM or comment to buy now - when it's gone, it's gone.",
+                "hashtags": f"#EBOLEKA #{item_hashtag} #ForSale #BuyNow #GreatDeal #SouthAfrica",
+            },
         ]
-    
-    # Pick a template based on hash of the input for variety
-    seed = hashlib.md5(f"{city}{category_or_item}".encode()).hexdigest()
+
+    seed = hashlib.md5(f"{item}{post_type_normalized}".encode()).hexdigest()
     index = int(seed, 16) % len(templates)
-    
-    logger.info(f"Generated fallback post for {city} (Type {post_type_normalized}, template {index}/{len(templates)})")
-    return templates[index]
+    structured = dict(templates[index])
+    structured["full_caption"] = _compose_caption(structured)
+    logger.info(
+        f"Generated fallback structured post (Type {post_type_normalized}, template {index + 1}/{len(templates)})"
+    )
+    return structured

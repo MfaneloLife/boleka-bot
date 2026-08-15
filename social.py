@@ -1,81 +1,106 @@
 """
-social.py - Social Media Poster for Boleka SA Marketplace Bot v1.0
-Posts ONLY to Facebook Page. Instagram is linked and will auto-sync.
-Uses facebook-sdk library for posting images with captions.
+social.py - Facebook Graph API poster for E-BOLEKA Marketplace Bot v2.0
+
+Posts directly to the E-BOLEKA Facebook Page using Meta Graph API
+system user credentials (a long-lived System User Access Token). Uses the
+raw Graph API via `requests` so we target the Page explicitly and keep
+full control over the API version.
 """
 
 import os
+import time
 import logging
-import facebook
+import requests
 
-# Configure logging
 logger = logging.getLogger(__name__)
+
+# Graph API version (override with GRAPH_API_VERSION if needed).
+GRAPH_API_VERSION = os.getenv("GRAPH_API_VERSION", "v21.0")
+GRAPH_API_BASE = f"https://graph.facebook.com/{GRAPH_API_VERSION}"
+
+
+def _get_credentials(page_access_token=None, page_id=None):
+    """Resolve the access token and Page ID from args or environment."""
+    token = page_access_token
+    if not token:
+        # Preferred credential: Meta Business Manager system user token.
+        # Legacy page token is kept as a fallback for backwards compatibility.
+        token = (
+            os.getenv("FB_SYSTEM_USER_ACCESS_TOKEN")
+            or os.getenv("META_SYSTEM_USER_TOKEN")
+            or os.getenv("FB_PAGE_ACCESS_TOKEN")
+        )
+
+    pid = page_id
+    if not pid:
+        pid = os.getenv("FB_PAGE_ID")
+
+    return token, pid
 
 
 def post_to_fb(image_path, caption, page_access_token=None, page_id=None):
     """
-    Post an image with caption to a Facebook Page.
-    Instagram is linked via Meta Account Center and will auto-sync.
-    
+    Post a photo + caption directly to the E-BOLEKA Facebook Page.
+
+    Uses the Meta Graph API system user credentials and POSTs to
+    `/{page-id}/photos` so the content lands on the Page itself.
+
     Args:
         image_path: Local file path to the image to post.
-        caption: The caption text (including hashtags).
-        page_access_token: Facebook Page access token (or reads from env).
-        page_id: Facebook Page ID (or reads from env).
-    
+        caption: Full caption (primary text + headline + description + offer).
+        page_access_token: Optional token override (defaults to env).
+        page_id: Optional Page ID override (defaults to env).
+
     Returns:
-        dict: {"success": True/False, "message": "...", "post_id": "..."}
+        dict: {"success": bool, "message": str, "post_id": str|None}
     """
-    # Get credentials from parameters or environment
-    if not page_access_token:
-        page_access_token = os.getenv("FB_PAGE_ACCESS_TOKEN")
-    if not page_id:
-        page_id = os.getenv("FB_PAGE_ID")
-    
-    # Validate credentials
-    if not page_access_token or not page_id:
-        error_msg = "Facebook credentials not configured. Missing FB_PAGE_ACCESS_TOKEN or FB_PAGE_ID."
+    token, pid = _get_credentials(page_access_token, page_id)
+
+    if not token or not pid:
+        error_msg = (
+            "Facebook credentials not configured. Missing system user token "
+            "(FB_SYSTEM_USER_ACCESS_TOKEN / META_SYSTEM_USER_TOKEN) or FB_PAGE_ID."
+        )
         logger.error(error_msg)
         return {"success": False, "message": error_msg, "post_id": None}
-    
-    # Validate image exists
+
     if not image_path or not os.path.exists(image_path):
         error_msg = f"Image file not found: {image_path}"
         logger.error(error_msg)
         return {"success": False, "message": error_msg, "post_id": None}
-    
+
+    url = f"{GRAPH_API_BASE}/{pid}/photos"
+
     try:
-        # Initialize Facebook Graph API
-        graph = facebook.GraphAPI(access_token=page_access_token, version="3.1")
-        
-        # Post photo to the Facebook Page
-        # Using put_photo which uploads a photo with a message
         with open(image_path, "rb") as image_file:
-            post_result = graph.put_photo(
-                image=image_file,
-                message=caption,
-            )
-        
-        # Extract post ID from the result
-        post_id = post_result.get("post_id") or post_result.get("id", "unknown")
-        
+            files = {"source": (os.path.basename(image_path), image_file, "image/jpeg")}
+            data = {
+                "message": caption,
+                "access_token": token,
+                "published": "true",
+            }
+            response = requests.post(url, data=data, files=files, timeout=60)
+
+        response.raise_for_status()
+        result = response.json()
+        post_id = result.get("post_id") or result.get("id")
+
         success_msg = (
-            f"Successfully posted to Facebook Page {page_id}. "
-            f"Post ID: {post_id}. Instagram will auto-sync if linked in Account Center."
+            f"Successfully posted to E-BOLEKA Facebook Page {pid}. Post ID: {post_id}."
         )
         logger.info(success_msg)
-        
-        return {
-            "success": True,
-            "message": success_msg,
-            "post_id": post_id,
-        }
-        
-    except facebook.GraphAPIError as e:
-        error_msg = f"Facebook Graph API error: {e}"
+        return {"success": True, "message": success_msg, "post_id": post_id}
+
+    except requests.HTTPError as e:
+        detail = ""
+        try:
+            detail = e.response.json().get("error", {}).get("message", "")
+        except Exception:
+            detail = str(e)
+        error_msg = f"Facebook Graph API error: {detail or e}"
         logger.error(error_msg)
         return {"success": False, "message": error_msg, "post_id": None}
-        
+
     except Exception as e:
         error_msg = f"Unexpected error posting to Facebook: {e}"
         logger.error(error_msg)
@@ -83,30 +108,22 @@ def post_to_fb(image_path, caption, page_access_token=None, page_id=None):
 
 
 def post_to_facebook_with_retry(image_path, caption, max_retries=2):
-    """
-    Post to Facebook with automatic retry on failure.
-    
-    Args:
-        image_path: Local file path to the image.
-        caption: The caption text.
-        max_retries: Maximum number of retry attempts.
-    
-    Returns:
-        dict: {"success": True/False, "message": "...", "post_id": "..."}
-    """
+    """Post to Facebook with automatic retry on failure."""
+    result = {"success": False, "message": "No attempts made", "post_id": None}
+
     for attempt in range(1, max_retries + 1):
         result = post_to_fb(image_path, caption)
-        
+
         if result["success"]:
             return result
-        
-        logger.warning(f"Facebook post attempt {attempt}/{max_retries} failed: {result['message']}")
-        
+
+        logger.warning(
+            f"Facebook post attempt {attempt}/{max_retries} failed: {result['message']}"
+        )
         if attempt < max_retries:
-            import time
-            wait_seconds = attempt * 5  # Exponential-ish backoff
+            wait_seconds = attempt * 5
             logger.info(f"Retrying in {wait_seconds} seconds...")
             time.sleep(wait_seconds)
-    
+
     logger.error(f"All {max_retries} Facebook post attempts failed.")
-    return result  # Return the last failure result
+    return result

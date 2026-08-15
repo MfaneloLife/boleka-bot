@@ -1,33 +1,50 @@
-# 🇿🇦 Boleka SA Marketplace Bot v1.0
+# 🇿🇦 E-BOLEKA Marketplace Bot v2.0
 
 Automated social media bot that promotes **eboleka.co.za** listings across South Africa.
-Posts to **Facebook Pages** — Instagram auto-syncs via Meta Account Center.
+Posts **3 times per day** directly to the **E-BOLEKA Facebook Page** using Meta Graph API
+system user credentials.
 
 ---
 
 ## 🎯 Mission
 
 1. **Get more users to list items for FREE** on eboleka.co.za across South Africa
-2. **Advertise items already available** on eboleka.co.za by city
+2. **Advertise items already available** on eboleka.co.za nationally
 
 ---
 
-## 🏙️ 9-City Rotation
+## 🎯 National Targeting (single market)
 
-Johannesburg → Pretoria → Cape Town → Durban → Bloemfontein → Port Elizabeth → East London → Polokwane → Rustenburg
+Every post targets a **national South Africa audience** as one market. Posts are **not**
+segmented by individual cities or townships.
 
-- Max **2 posts per city per day**
-- Max **20 posts total per day**
+- **3 posts per day** consistently
 
 ---
 
 ## ⏰ Schedule (SAST)
 
-Runs automatically **4 times per day**:
+Runs automatically **3 times per day**:
 - 08:00
-- 12:00
-- 16:00
-- 20:00
+- 13:00
+- 18:00
+
+---
+
+## 🧠 High-Converting Post Structure
+
+Every generated post follows this proven ad layout:
+
+- **Primary Text** — a hook that highlights a pain point and introduces the solution immediately
+- **Headline** — a bold, punchy call-to-action or value highlight
+- **Description** — a short clarifying subtext expanding the benefit
+
+And the **4 pillars** of every post:
+
+1. **High-contrast visuals** (auto-enhanced before publishing) or clean product layouts
+2. **A clear value proposition** showing instant utility
+3. **Before/after or side-by-side comparison** where relevant
+4. **An OFFER** — a clear incentive, discount or direct action prompt
 
 ---
 
@@ -81,8 +98,8 @@ In your Render dashboard, go to **Environment** and add these variables:
 | Variable | Description | Where to Get It |
 |---|---|---|
 | `DEEPSEEK_API_KEY` | DeepSeek AI API key | [platform.deepseek.com](https://platform.deepseek.com) |
-| `FB_PAGE_ACCESS_TOKEN` | Facebook Page access token | Facebook Developer Console |
-| `FB_PAGE_ID` | Facebook Page ID | Facebook Page → About |
+| `FB_SYSTEM_USER_ACCESS_TOKEN` | Meta Business Manager System User Access Token | Meta Business Manager → System Users |
+| `FB_PAGE_ID` | E-BOLEKA Facebook Page ID | Facebook Page → About |
 | `UNSPLASH_ACCESS_KEY` | Unsplash API key | [unsplash.com/developers](https://unsplash.com/developers) |
 | `FLASK_SECRET` | Random string for Flask sessions | Generate any random string |
 
@@ -121,14 +138,12 @@ Since Render free tier sleeps after inactivity, use an **external cron job** to 
 3. Go to **API Keys** → **Create new key**
 4. Copy the key (starts with `sk-`)
 
-### Facebook Page Access Token
-1. Go to [developers.facebook.com](https://developers.facebook.com)
-2. Create a new app (type: **Business**)
-3. Add **Facebook Login** and **Pages API** products
-4. Go to **Graph API Explorer**
-5. Select your app and **Page Access Token**
-6. Grant permissions: `pages_manage_posts`, `pages_read_engagement`
-7. Generate token and copy it
+### Meta System User Access Token
+1. Go to [business.facebook.com](https://business.facebook.com) → **Business settings** → **System users**
+2. Create a System User and assign it the **Admin** role on your Facebook app
+3. Add the System User to the **E-BOLEKA Page** with `pages_manage_posts` and `pages_read_engagement`
+4. In **System users**, generate a **long-lived access token**
+5. Copy it into `FB_SYSTEM_USER_ACCESS_TOKEN`
 
 ### Facebook Page ID
 1. Go to your Facebook Page
@@ -198,12 +213,12 @@ The dashboard at `/` shows:
 ## 📝 Post Types
 
 ### Type A — Call to List
-Asks people in a city who have a specific category of items to list them FREE on Boleka.co.za.
-> "📢 Who in Johannesburg has Tents & Camping Gear to rent or sell? 💰 List it for FREE on Boleka.co.za and make money this week! 🚀"
+Asks people **across South Africa** who have a specific category of items to list them FREE on E-BOLEKA.
+> "🔥 STOP LETTING YOUR STUFF COLLECT DUST — EARN TODAY. Still storing tents you barely use while cash is tight? List FREE on E-BOLEKA and turn clutter into income in minutes. 🎁 List FREE today — no fees and you keep 100% of your earnings."
 
 ### Type B — New Listing Promotion
-Promotes a newly scraped listing from eboleka.co.za.
-> "🆕 NEW in Cape Town! 🔥 DJ Sound System for R2,500 on Boleka.co.za. DM to buy! 🏃‍♂️💨"
+Promotes a newly scraped listing from eboleka.co.za to a national audience.
+> "🔥 HOT FIND — GRAB IT BEFORE IT'S GONE. Tired of endless searching and overpaying? We just found it for you on E-BOLEKA. 🎁 DM now to secure it — first come, first served."
 
 ---
 
@@ -220,9 +235,8 @@ The dashboard also shows live in-memory logs (last 200 entries).
 
 ## ⚠️ Rate Limits
 
-- **Max 2 posts per city per day** — prevents spamming
-- **Max 20 posts total per day** — stays within Facebook API limits
-- **2-second delay between posts** — avoids rate limiting
+- **Exactly 3 posts per day** — one per scheduled slot (08:00, 13:00, 18:00 SAST)
+- **3-day dedup** — the same category/item is not repeated within 3 days
 
 ---
 
@@ -233,7 +247,7 @@ The dashboard also shows live in-memory logs (last 200 entries).
 - **schedule** — Job scheduling
 - **requests + BeautifulSoup4** — Web scraping eboleka.co.za
 - **OpenAI SDK** — DeepSeek AI integration
-- **facebook-sdk** — Facebook Graph API posting
+- **requests** — Facebook Graph API posting (Meta system user credentials)
 - **Pillow** — Image optimization
 - **python-dotenv** — Environment variable management
 - **gunicorn** — WSGI production server
