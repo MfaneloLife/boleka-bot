@@ -5,6 +5,10 @@ Posts directly to the E-BOLEKA Facebook Page using Meta Graph API
 system user credentials (a long-lived System User Access Token). Uses the
 raw Graph API via `requests` so we target the Page explicitly and keep
 full control over the API version.
+
+All posts are created as UNPUBLISHED (draft) so they are only visible to the
+Page admin, never to the public. The owner reviews and publishes each one
+manually.
 """
 
 import os
@@ -40,10 +44,12 @@ def _get_credentials(page_access_token=None, page_id=None):
 
 def post_to_fb(image_path, caption, page_access_token=None, page_id=None):
     """
-    Post a photo + caption directly to the E-BOLEKA Facebook Page.
+    Create a DRAFT photo + caption on the E-BOLEKA Facebook Page.
 
     Uses the Meta Graph API system user credentials and POSTs to
-    `/{page-id}/photos` so the content lands on the Page itself.
+    `/{page-id}/photos` with `published=false` so the content is saved as an
+    unpublished draft (visible only to the Page admin), never shown publicly.
+    The owner then reviews and publishes it manually.
 
     Args:
         image_path: Local file path to the image to post.
@@ -77,7 +83,7 @@ def post_to_fb(image_path, caption, page_access_token=None, page_id=None):
             data = {
                 "message": caption,
                 "access_token": token,
-                "published": "true",
+                "published": "false",
             }
             response = requests.post(url, data=data, files=files, timeout=60)
 
@@ -86,7 +92,8 @@ def post_to_fb(image_path, caption, page_access_token=None, page_id=None):
         post_id = result.get("post_id") or result.get("id")
 
         success_msg = (
-            f"Successfully posted to E-BOLEKA Facebook Page {pid}. Post ID: {post_id}."
+            f"Successfully created DRAFT on E-BOLEKA Facebook Page {pid}. "
+            f"Draft ID: {post_id}. Awaiting manual review/publish."
         )
         logger.info(success_msg)
         return {"success": True, "message": success_msg, "post_id": post_id}
