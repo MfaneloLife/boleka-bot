@@ -137,6 +137,7 @@ def post_to_fb(image_path, caption, page_access_token=None, page_id=None):
         feed_data = {
             "message": caption,
             "access_token": token,
+            "published": "false",
             "scheduled_publish_time": str(publish_time),
             "attached_media": json.dumps([{"media_fbid": photo_id}]),
         }
