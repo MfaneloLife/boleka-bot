@@ -1,18 +1,24 @@
 """
 social.py - Facebook Graph API poster for E-BOLEKA Marketplace Bot v2.0
 
-Creates DRAFT posts on the E-BOLEKA Facebook Page using Meta Graph API
-system user credentials. Drafts are saved as unpublished Page posts that
-appear under Meta Business Suite -> Content/Planner -> Drafts (classic Page
-"Publishing Tools -> Drafts") so the owner can review and publish manually.
+Schedules posts on the E-BOLEKA Facebook Page using Meta Graph API system
+user credentials. Posts are scheduled with a future `scheduled_publish_time`
+so they reliably appear in Meta Business Suite -> Planner -> Scheduled, where
+the owner can review, edit, reschedule, or manually publish each one.
 
-Why /feed instead of /photos:
-  Posting a photo directly to /{page-id}/photos with published=false creates a
-  hidden "unpublished photo" that only surfaces in Ads Manager, not in the
-  Page's normal draft queue. To make drafts visible in Meta Business Suite,
-  we first upload the photo as an unpublished asset, then attach it to a draft
-  post on /{page-id}/feed (published=false), which is the documented way to
-  create a draft that shows in the Page's content planner.
+Why scheduled instead of published=false drafts:
+  Meta's Graph API `published=false` creates an "unpublished page post" that
+  is meant for ad creative (dark posts). It does NOT surface in the Meta
+  Business Suite "Drafts" tab, which is only populated by content drafted
+  inside Meta Business Suite itself. Scheduling a post into the future makes
+  it show up in the content Planner, giving the owner a reliable place to
+  review and publish manually (or edit/reschedule/delete).
+
+To attach the image we use a two-step process:
+  1) Upload the photo as an unpublished asset (/{page-id}/photos,
+     published=false) to get a photo ID.
+  2) Create a scheduled feed post (/{page-id}/feed) with that photo attached
+     via `attached_media`.
 """
 
 import os
@@ -26,6 +32,15 @@ logger = logging.getLogger(__name__)
 # Graph API version (override with GRAPH_API_VERSION if needed).
 GRAPH_API_VERSION = os.getenv("GRAPH_API_VERSION", "v21.0")
 GRAPH_API_BASE = f"https://graph.facebook.com/{GRAPH_API_VERSION}"
+
+# How far in the future to schedule each post (in days). The posts appear in
+# Meta Business Suite -> Planner -> Scheduled for manual review. If the owner
+# does nothing, the post auto-publishes after this many days. Override with
+# the POST_SCHEDULE_DAYS environment variable.
+try:
+    SCHEDULE_LEAD_DAYS = int(os.getenv("POST_SCHEDULE_DAYS", "7"))
+except (TypeError, ValueError):
+    SCHEDULE_LEAD_DAYS = 7
 
 
 def _get_credentials(page_access_token=None, page_id=None):
@@ -57,13 +72,11 @@ def _extract_error_detail(response):
 
 def post_to_fb(image_path, caption, page_access_token=None, page_id=None):
     """
-    Create a DRAFT photo + caption on the E-BOLEKA Facebook Page.
+    Schedule a photo + caption post on the E-BOLEKA Facebook Page.
 
-    The draft is created on the /{page-id}/feed endpoint with published=false
-    so it shows up in Meta Business Suite -> Planner -> Drafts, ready for the
-    owner to review and publish manually. The photo is attached via a
-    two-step process (unpublished photo upload -> feed draft with
-    attached_media).
+    The post is created on /{page-id}/feed with a future `scheduled_publish_time`
+    so it appears in Meta Business Suite -> Planner -> Scheduled, ready for the
+    owner to review and publish manually (or edit/reschedule/delete).
 
     Args:
         image_path: Local file path to the image to post.
@@ -115,14 +128,16 @@ def post_to_fb(image_path, caption, page_access_token=None, page_id=None):
             return {"success": False, "message": error_msg, "post_id": None}
 
         # ------------------------------------------------------------------
-        # Step 2: create a DRAFT feed post with the photo attached. This is the
-        # step that makes the draft visible in Meta Business Suite's Drafts.
+        # Step 2: schedule a feed post with the photo attached. The future
+        # publish time makes it show in Meta Business Suite -> Planner ->
+        # Scheduled for manual review.
         # ------------------------------------------------------------------
+        publish_time = int(time.time()) + (SCHEDULE_LEAD_DAYS * 86400)
         feed_url = f"{GRAPH_API_BASE}/{pid}/feed"
         feed_data = {
             "message": caption,
             "access_token": token,
-            "published": "false",
+            "scheduled_publish_time": str(publish_time),
             "attached_media": json.dumps([{"media_fbid": photo_id}]),
         }
         feed_response = requests.post(feed_url, data=feed_data, timeout=60)
@@ -131,8 +146,8 @@ def post_to_fb(image_path, caption, page_access_token=None, page_id=None):
         post_id = feed_result.get("id") or feed_result.get("post_id")
 
         success_msg = (
-            f"Successfully created DRAFT on E-BOLEKA Facebook Page {pid}. "
-            f"Draft ID: {post_id}. Review and publish it in Meta Business Suite -> Drafts."
+            f"Successfully scheduled post on E-BOLEKA Facebook Page {pid}. "
+            f"Post ID: {post_id}. Review it in Meta Business Suite -> Planner -> Scheduled."
         )
         logger.info(success_msg)
         return {"success": True, "message": success_msg, "post_id": post_id}
@@ -144,13 +159,13 @@ def post_to_fb(image_path, caption, page_access_token=None, page_id=None):
         return {"success": False, "message": error_msg, "post_id": None}
 
     except Exception as e:
-        error_msg = f"Unexpected error creating Facebook draft: {e}"
+        error_msg = f"Unexpected error scheduling Facebook post: {e}"
         logger.error(error_msg)
         return {"success": False, "message": error_msg, "post_id": None}
 
 
 def post_to_facebook_with_retry(image_path, caption, max_retries=2):
-    """Create a Facebook draft with automatic retry on failure."""
+    """Schedule a Facebook post with automatic retry on failure."""
     result = {"success": False, "message": "No attempts made", "post_id": None}
 
     for attempt in range(1, max_retries + 1):
@@ -160,12 +175,12 @@ def post_to_facebook_with_retry(image_path, caption, max_retries=2):
             return result
 
         logger.warning(
-            f"Facebook draft attempt {attempt}/{max_retries} failed: {result['message']}"
+            f"Facebook schedule attempt {attempt}/{max_retries} failed: {result['message']}"
         )
         if attempt < max_retries:
             wait_seconds = attempt * 5
             logger.info(f"Retrying in {wait_seconds} seconds...")
             time.sleep(wait_seconds)
 
-    logger.error(f"All {max_retries} Facebook draft attempts failed.")
+    logger.error(f"All {max_retries} Facebook schedule attempts failed.")
     return result

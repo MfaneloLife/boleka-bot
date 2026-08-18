@@ -3,8 +3,10 @@ app.py - E-BOLEKA Marketplace Bot v2.0
 Main Flask application with scheduler, web dashboard, and post orchestration.
 
 Posts 3 times per day (08:00, 13:00, 18:00 SAST) to the E-BOLEKA
-Facebook Page as UNPUBLISHED DRAFTS using Meta Graph API system user
-credentials. The owner reviews and publishes each draft manually.
+Facebook Page as SCHEDULED posts using Meta Graph API system user
+credentials. Posts are scheduled a few days out so they appear in Meta
+Business Suite -> Planner -> Scheduled, where the owner reviews and
+publishes each one manually.
 
 Content rules:
   - National South Africa audience (single market - no city segmentation).
@@ -326,7 +328,7 @@ def create_type_a_post(market, category_info, api_key):
         state.posts_today += 1
         mark_as_posted(category_name, "A")
         _save_state()
-        state.add_log(f"✅ Created draft Type A (national): {category_name} (Draft ID: {result.get('post_id')})")
+        state.add_log(f"✅ Scheduled Type A (national): {category_name} (Post ID: {result.get('post_id')})")
     else:
         state.add_log(f"❌ Failed Type A: {category_name} - {result.get('message')}", "ERROR")
 
@@ -373,7 +375,7 @@ def create_type_b_post(market, listing, api_key):
         state.posts_today += 1
         mark_as_posted(title, "B")
         _save_state()
-        state.add_log(f"✅ Created draft Type B (national): {title} (Draft ID: {result.get('post_id')})")
+        state.add_log(f"✅ Scheduled Type B (national): {title} (Post ID: {result.get('post_id')})")
     else:
         state.add_log(f"❌ Failed Type B: {title} - {result.get('message')}", "ERROR")
 
@@ -445,7 +447,7 @@ def run_bot_cycle():
         cleanup_images()
 
         if result and result.get("success"):
-            state.add_log(f"✅ Cycle complete: 1 draft created. Total today: {state.posts_today}/{MAX_POSTS_PER_DAY}")
+            state.add_log(f"✅ Cycle complete: 1 post scheduled. Total today: {state.posts_today}/{MAX_POSTS_PER_DAY}")
         else:
             msg = result.get("message") if result else "No content available"
             state.add_log(f"❌ Cycle failed to post: {msg}", "ERROR")
@@ -597,7 +599,7 @@ def api_test_post():
             cleanup_images()
 
             if result and result.get("success"):
-                state.add_log(f"✅ Test post successful for national {MARKET_NAME}! Draft created on E-BOLEKA Facebook Page.")
+                state.add_log(f"✅ Test post successful for national {MARKET_NAME}! Scheduled on E-BOLEKA Facebook Page.")
             else:
                 msg = result.get("message") if result else "No content available"
                 state.add_log(f"❌ Test post failed: {msg}", "ERROR")
