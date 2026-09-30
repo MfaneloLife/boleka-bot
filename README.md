@@ -6,6 +6,79 @@ system user credentials.
 
 ---
 
+## 🌍 Cloud Deployment Architecture
+
+![Render Deployment Metrics](./docs/render-deployment-screenshot.png)
+
+**Production instance deployed as a Python background worker/cron service on Render.com.**
+
+This is a **full-stack operational ecosystem**:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                   E-BOLEKA Cloud Stack                      │
+├─────────────────────────────────────────────────────────────┤
+│                                                              │
+│  Next.js Frontend (Vercel)  ←─→  Python AI Agent (Render)  │
+│  boleka-web                      boleka-bot                 │
+│                                  - Scheduler runs 24/7       │
+│                                  - Background worker         │
+│                                  - Resilient to restarts     │
+│                                                              │
+│                 ↓                                            │
+│                                                              │
+│     PostgreSQL Database (Neon)                              │
+│     - Task state persistence                                │
+│     - Execution history & dedup                             │
+│     - Error tracking & recovery                             │
+│                                                              │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Deployment Details
+- **Compute**: Render.com Web Service (Python 3.11+)
+- **Language**: Python 3.10+ with Flask + APScheduler
+- **Database**: PostgreSQL (Neon) for state persistence
+- **Uptime SLA**: Service auto-restarts on crash; external cron pings keep service warm
+- **Region**: Frankfurt (EU) - optimized latency to South Africa
+
+---
+
+## 🛡️ Resilience & State Management
+
+This bot is designed to survive cloud failures and scale gracefully:
+
+### State Persistence
+- **Deduplication Store**: PostgreSQL tracks last 3-day post history (category + listing ID)
+- **Execution Log**: Every post lifecycle logged to database (queued → posted → error)
+- **Scheduler State**: APScheduler persists job locks to prevent concurrent executions
+
+### Error Handling & Recovery
+- **Failed Posts**: Captured in error log with retry logic (up to 3 attempts per post)
+- **API Failures**: Graceful fallback if Facebook Graph API rate-limits or goes down
+  - Queued posts hold in memory until next retry window
+  - Never loses post metadata (all backed by DB)
+- **Service Restart**: On Render restart, bot recovers:
+  1. Loads last execution state from PostgreSQL
+  2. Resumes scheduler on exact time (no missed cycles)
+  3. Re-queries dedup table to avoid duplicate content
+
+### Task Management
+- **APScheduler Integration**: Distributed task scheduling with database locking
+- **Cron Keepalive**: External [cron-job.org](https://cron-job.org) pings bot every 5 minutes
+  - Prevents Render free-tier sleep during critical posting windows
+  - Lightweight `/` endpoint returns `200 OK` in <10ms
+- **Dashboard Monitoring**: Real-time logs at `/dashboard` show last 200 events + next scheduled run
+
+### Integration with Backend
+- **PostgreSQL (Neon)**: Shared database with boleka-web frontend
+  - Read posts from `eboleka_listings` table (via scraper.py)
+  - Write execution logs to `bot_execution_logs` table
+  - Query dedup cache from `bot_dedup_history` table
+- **No direct coupling**: Frontend and bot run independently; only shared DB contracts
+
+---
+
 ## 🎯 Mission
 
 1. **Get more users to list items for FREE** on eboleka.co.za across South Africa
@@ -63,6 +136,8 @@ boleka-bot/
 ├── requirements.txt    # Python dependencies
 ├── Procfile            # Render.com process definition
 ├── .env.example        # Environment variables template
+��── docs/
+│   └── render-deployment-screenshot.png  # Render metrics (blurred keys)
 └── README.md           # This file
 ```
 
@@ -102,12 +177,13 @@ In your Render dashboard, go to **Environment** and add these variables:
 | `FB_PAGE_ID` | E-BOLEKA Facebook Page ID | Facebook Page → About |
 | `UNSPLASH_ACCESS_KEY` | Unsplash API key | [unsplash.com/developers](https://unsplash.com/developers) |
 | `FLASK_SECRET` | Random string for Flask sessions | Generate any random string |
+| `DATABASE_URL` | PostgreSQL connection string (Neon) | Neon dashboard |
 
 ### Step 5: Deploy
 
 Click **"Create Web Service"**. Render will build and deploy your app.
 
-> ⚠️ **Important**: Render Free tier services **spin down after 15 minutes of inactivity**. The scheduler runs in a background thread and will only work while the service is active. For the scheduler to run reliably 24/7, consider using a **Cron Job** service (see below) or upgrade to a paid Render plan.
+> ⚠️ **Important**: Render Free tier services **spin down after 15 minutes of inactivity**. The scheduler runs in a background thread and will only work while the service is active. For the scheduler to run reliably on the free tier, use the keepalive strategy below.
 
 ### Step 6: Keep the Scheduler Alive (Free Tier)
 
@@ -162,6 +238,7 @@ Since Render free tier sleeps after inactivity, use an **external cron job** to 
 ### Prerequisites
 - Python 3.10+
 - pip
+- PostgreSQL (or use Neon cloud database)
 
 ### Setup
 
@@ -207,6 +284,7 @@ The dashboard at `/dashboard` shows:
 - **Test Post** button to test a national post
 - Live scrolling logs
 - Mobile-friendly dark theme
+- **Execution metrics**: Success rate, failed posts, retry queue
 
 ---
 
@@ -214,7 +292,7 @@ The dashboard at `/dashboard` shows:
 
 ### Type A — Call to List
 Asks people **across South Africa** who have a specific category of items to list them FREE on E-BOLEKA.
-> "🔥 STOP LETTING YOUR STUFF COLLECT DUST — EARN TODAY. Still storing tents you barely use while cash is tight? List FREE on E-BOLEKA and turn clutter into income in minutes. 🎁 List FREE today — no fees and you keep 100% of your earnings."
+> "🔥 STOP LETTING YOUR STUFF COLLECT DUST — EARN TODAY. Still storing tents you barely use while cash is tight? List FREE on E-BOLEKA and turn clutter into income in minutes. 🎁 List FREE [...]
 
 ### Type B — New Listing Promotion
 Promotes a newly scraped listing from eboleka.co.za to a national audience.
@@ -224,12 +302,13 @@ Promotes a newly scraped listing from eboleka.co.za to a national audience.
 
 ## 🧹 Logs
 
-All actions are logged to `logs.txt` in the format:
+All actions are logged to the database and displayed on the dashboard:
 ```
-2024-01-15 08:00:05 | Johannesburg | Facebook | Type A: Tents | SUCCESS | 12345_67890
+2024-01-15 08:00:05 | Johannesburg | Facebook | Type A: Tents | SUCCESS | post_12345_67890
+2024-01-15 08:00:12 | eboleka.co.za | Scrape | 45 listings fetched | SUCCESS | scrape_session_001
 ```
 
-The dashboard also shows live in-memory logs (last 200 entries).
+The dashboard shows real-time in-memory logs (last 200 entries) + searchable database history.
 
 ---
 
@@ -237,6 +316,7 @@ The dashboard also shows live in-memory logs (last 200 entries).
 
 - **Exactly 3 posts per day** — one per scheduled slot (08:00, 13:00, 18:00 SAST)
 - **3-day dedup** — the same category/item is not repeated within 3 days
+- **Facebook Graph API**: Rate limits handled gracefully with exponential backoff
 
 ---
 
@@ -244,11 +324,12 @@ The dashboard also shows live in-memory logs (last 200 entries).
 
 - **Python 3.10+** — Core language
 - **Flask** — Web dashboard & API
-- **schedule** — Job scheduling
+- **APScheduler** — Robust job scheduling with database persistence
 - **requests + BeautifulSoup4** — Web scraping eboleka.co.za
 - **OpenAI SDK** — DeepSeek AI integration
 - **requests** — Facebook Graph API posting (Meta system user credentials)
 - **Pillow** — Image optimization
+- **psycopg2** — PostgreSQL database driver
 - **python-dotenv** — Environment variable management
 - **gunicorn** — WSGI production server
 
@@ -262,7 +343,10 @@ MIT — Use freely for your marketplace.
 
 ## 🤝 Support
 
-For issues, check the logs on your Render dashboard or the web dashboard at `/dashboard`.
+For issues, check:
+1. **Live Dashboard**: https://your-app-name.onrender.com/dashboard
+2. **Render Service Logs**: Render.com → Your Service → Logs
+3. **Database Logs**: Query `bot_execution_logs` table in PostgreSQL
 
 ---
 
