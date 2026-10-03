@@ -133,6 +133,38 @@ def get_listing_image(listing_url):
         return None
 
 
+def download_image_from_url(image_url):
+    """
+    Download an image from a direct URL (e.g. a Cloudflare R2 listing image).
+
+    Args:
+        image_url: Full URL to the image file.
+
+    Returns:
+        str: Local file path to the downloaded image, or None if failed.
+    """
+    ensure_images_dir()
+
+    try:
+        response = requests.get(image_url, timeout=15)
+        response.raise_for_status()
+
+        import hashlib
+        url_hash = hashlib.md5(image_url.encode()).hexdigest()[:12]
+        filepath = os.path.join(IMAGES_DIR, f"db_{url_hash}.jpg")
+
+        img = Image.open(BytesIO(response.content))
+        img = img.convert("RGB")
+        img.save(filepath, "JPEG", quality=85, optimize=True)
+
+        logger.info(f"Downloaded DB item image: {filepath}")
+        return filepath
+
+    except Exception as e:
+        logger.error(f"Error downloading image from {image_url}: {e}")
+        return None
+
+
 def get_unsplash_image(search_term, unsplash_access_key):
     """
     Download an image from Unsplash API based on a search term.

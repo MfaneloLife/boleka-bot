@@ -40,9 +40,16 @@ import schedule
 
 # Import local modules
 from scraper import get_empty_categories, get_new_listings
-from ai import generate_post, MARKET
-from images import get_listing_image, get_unsplash_image, cleanup_images, enhance_image
+from ai import generate_post, MARKET, format_price_display
+from images import (
+    get_listing_image,
+    get_unsplash_image,
+    cleanup_images,
+    enhance_image,
+    download_image_from_url,
+)
 from social import post_to_fb
+from db import get_unposted_items, get_item_images, mark_item_posted
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -382,6 +389,78 @@ def create_type_b_post(market, listing, api_key):
     return result
 
 
+def create_item_post(item, api_key):
+    """Create a Type B post from a database Item record (national)."""
+    item_id = item.get("id")
+    title = (item.get("title") or "Check this listing").strip()
+    item_type = (item.get("itemType") or "SELLING").strip().upper()
+    price = item.get("price")
+    rental_price = item.get("rentalPrice")
+
+    # Enforce pricing rules: '/day' suffix only for rental rates.
+    price_display = format_price_display(item_type, price, rental_price)
+
+    state.add_log(f"Creating Type B post (DB, national): {title} | {price_display}")
+
+    post = generate_post(
+        post_type="B",
+        category_or_item=title,
+        price=price,
+        price_display=price_display,
+        api_key=api_key,
+    )
+    caption = post.get("full_caption") or post.get("primary_text") or ""
+
+    image_path = None
+
+    # 1) Prefer the item's own image stored in the DB (Cloudflare R2 URLs).
+    try:
+        for image in get_item_images(item_id):
+            if image.get("url"):
+                image_path = download_image_from_url(image["url"])
+                if image_path:
+                    break
+    except Exception as e:
+        state.add_log(f"Could not load DB images for item {item_id}: {e}", "WARNING")
+
+    # 2) Fall back to Unsplash.
+    if not image_path:
+        unsplash_key = os.getenv("UNSPLASH_ACCESS_KEY")
+        if unsplash_key:
+            search_term = " ".join(title.split()[:2]) if title else "product"
+            image_path = get_unsplash_image(search_term, unsplash_key)
+
+    if not image_path:
+        state.add_log("No image available. Skipping post.", "ERROR")
+        return {"success": False, "message": "No image available", "item_id": item_id}
+
+    # Pillar 1: ensure high-contrast visuals before publishing.
+    image_path = enhance_image(image_path)
+
+    result = post_to_fb(image_path, caption)
+
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    status = "SUCCESS" if result["success"] else "FAILED"
+    log_to_file(timestamp, MARKET_NAME, "Facebook",
+                f"Type B (DB): {title} ({price_display}) | {status} | {result.get('post_id', 'N/A')}")
+
+    if result["success"]:
+        post_id = result.get("post_id")
+        try:
+            mark_item_posted(item_id, post_id)
+        except Exception as e:
+            logger.error(f"Failed to mark item {item_id} as posted: {e}")
+            state.add_log(f"⚠️ Posted but failed to mark item as posted: {e}", "WARNING")
+        state.posts_today += 1
+        mark_as_posted(title, "B")
+        _save_state()
+        state.add_log(f"✅ Scheduled Type B (DB, national): {title} (Post ID: {post_id})")
+    else:
+        state.add_log(f"❌ Failed Type B (DB): {title} - {result.get('message')}", "ERROR")
+
+    return result
+
+
 def _create_type_a_attempt(market, api_key):
     """Fetch categories and attempt one Type A post."""
     empty_categories = get_empty_categories(market)
@@ -393,7 +472,18 @@ def _create_type_a_attempt(market, api_key):
 
 
 def _create_type_b_attempt(market, api_key):
-    """Fetch listings and attempt one Type B post."""
+    """Fetch unposted DB items and attempt one Type B post (scraper fallback)."""
+    items = []
+    try:
+        items = get_unposted_items()
+    except Exception as e:
+        state.add_log(f"Database unavailable ({e}); falling back to scraper.", "WARNING")
+
+    item = _pick_unposted_listing(items)
+    if item:
+        return create_item_post(item, api_key)
+
+    state.add_log("No unposted DB items. Falling back to scraper listings.", "WARNING")
     listings = get_new_listings(market)
     listing = _pick_unposted_listing(listings)
     if not listing:

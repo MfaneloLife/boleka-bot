@@ -129,7 +129,9 @@ boleka-bot/
 ├── scraper.py          # Scrapes eboleka.co.za for listings & categories
 ├── ai.py               # DeepSeek AI post generator (SA tone, emojis, hashtags)
 ├── social.py           # Facebook Graph API poster
-├── images.py           # Image handler (eboleka + Unsplash)
+├── images.py           # Image handler (eboleka + Unsplash + R2/DB images)
+├── db.py               # Neon PostgreSQL connection + Item queries (psycopg2)
+├── post_items.py       # Standalone script: query, post, mark Item rows
 ├── templates/
 │   └── dashboard.html  # Clean mobile-friendly web dashboard
 ├── images/             # Downloaded images (cleaned after posting)
@@ -172,12 +174,12 @@ In your Render dashboard, go to **Environment** and add these variables:
 
 | Variable | Description | Where to Get It |
 |---|---|---|
+| `DATABASE_URL` | Neon PostgreSQL connection string (Prisma/Next.js app) | Neon dashboard → Connection string |
 | `DEEPSEEK_API_KEY` | DeepSeek AI API key | [platform.deepseek.com](https://platform.deepseek.com) |
 | `FB_SYSTEM_USER_ACCESS_TOKEN` | Meta Business Manager System User Access Token | Meta Business Manager → System Users |
 | `FB_PAGE_ID` | E-BOLEKA Facebook Page ID | Facebook Page → About |
 | `UNSPLASH_ACCESS_KEY` | Unsplash API key | [unsplash.com/developers](https://unsplash.com/developers) |
 | `FLASK_SECRET` | Random string for Flask sessions | Generate any random string |
-| `DATABASE_URL` | PostgreSQL connection string (Neon) | Neon dashboard |
 
 ### Step 5: Deploy
 
@@ -300,6 +302,33 @@ Promotes a newly scraped listing from eboleka.co.za to a national audience.
 
 ---
 
+## 🗄️ Database Integration (Neon + Prisma)
+
+The bot reads listings directly from the **Neon PostgreSQL** database managed by
+the Next.js Prisma app, via `psycopg2` and the `DATABASE_URL` environment variable.
+
+- `db.py` — connection helper + queries against the quoted `"Item"` table.
+- `post_items.py` — standalone script: query unposted items, generate a post,
+  publish via the Meta Graph API, then `UPDATE ... SET is_posted_to_social = true`.
+
+### Pricing rules
+- **Rental items** (`itemType = RENTING`): price shown with a `/day` suffix.
+- **Direct-sale items** (`itemType = SELLING`): price shown with **no** daily-rate suffix.
+- **Both** (`itemType = BOTH`): sale price (no suffix) + rental price with `/day`.
+
+### Audience rules
+Every post targets **South Africa as a single national market**. Copy never
+mentions or segments individual cities, towns or townships.
+
+Run the standalone poster with:
+
+```bash
+python post_items.py            # process up to 5 unposted items
+python post_items.py --limit 3  # process up to 3 unposted items
+```
+
+---
+
 ## 🧹 Logs
 
 All actions are logged to the database and displayed on the dashboard:
@@ -328,8 +357,8 @@ The dashboard shows real-time in-memory logs (last 200 entries) + searchable dat
 - **requests + BeautifulSoup4** — Web scraping eboleka.co.za
 - **OpenAI SDK** — DeepSeek AI integration
 - **requests** — Facebook Graph API posting (Meta system user credentials)
+- **psycopg2** — Neon PostgreSQL connection (queries the Prisma-managed `Item` table)
 - **Pillow** — Image optimization
-- **psycopg2** — PostgreSQL database driver
 - **python-dotenv** — Environment variable management
 - **gunicorn** — WSGI production server
 

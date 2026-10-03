@@ -52,8 +52,49 @@ def _get_client(api_key):
     return OpenAI(api_key=api_key, base_url=DEEPSEEK_BASE_URL)
 
 
-def _build_prompt(post_type, category_or_item, price):
-    price_display = f"R{price}" if price else None
+def _fmt_rand(value):
+    """Format a numeric price as a clean Rand string (no trailing .0)."""
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return None
+    if value.is_integer():
+        return f"{int(value):,}"
+    return f"{value:,.2f}"
+
+
+def format_price_display(item_type, price, rental_price=None):
+    """
+    Build the price string for a post, enforcing the strict pricing rules.
+
+    Business rules:
+      - RENTING items: price shown WITH a '/day' suffix (per-day rate).
+      - SELLING items: price shown WITHOUT any daily-rate suffix.
+      - BOTH items:    sale price (no suffix) + rental price with '/day'.
+    """
+    itype = (item_type or "").strip().upper()
+    sale = _fmt_rand(price)
+    rental = _fmt_rand(rental_price) if rental_price is not None else None
+
+    if itype == "RENTING":
+        return f"R{sale}/day" if sale is not None else "Ask for price"
+
+    if itype == "BOTH":
+        parts = []
+        if sale is not None:
+            parts.append(f"R{sale} to buy")
+        if rental is not None:
+            parts.append(f"R{rental}/day to rent")
+        if parts:
+            return " · ".join(parts)
+        return f"R{sale}" if sale is not None else "Ask for price"
+
+    # SELLING (and any unrecognised type): direct sale, no '/day' suffix.
+    return f"R{sale}" if sale is not None else "Ask for price"
+
+
+def _build_prompt(post_type, category_or_item, price, price_display=None):
+    price_display = price_display or (f"R{price}" if price else None)
 
     system_prompt = (
         "You are a world-class direct-response copywriter for E-BOLEKA, South Africa's "
@@ -97,11 +138,15 @@ def _build_prompt(post_type, category_or_item, price):
             f"Africa audience.\n"
             f"Item: {category_or_item}\n"
             f"Price: {price_display or 'Ask for price'}\n\n"
+            "Use the price EXACTLY as provided above, including any '/day' suffix — never "
+            "invent, round, or remove it.\n\n"
             "Open the primary_text by naming the reader's exact frustration (endless "
             "searching, overpaying, missing out on deals) then present this item as the fast, "
             "specific solution. Sell the vivid AFTER state of owning it. Make the offer a "
             "direct, urgent action (comment/DM to secure, limited availability, buy before "
-            "it's gone). Do NOT mention any website, link or URL."
+            "it's gone). Target the WHOLE of South Africa as ONE national market — never "
+            "name or target a specific city, town, suburb or township. Do NOT mention any "
+            "website, link or URL."
         )
 
     return system_prompt, user_prompt
@@ -161,7 +206,7 @@ def _parse_ai_response(content):
     }
 
 
-def generate_post(post_type, category_or_item, price=None, market=MARKET, api_key=None):
+def generate_post(post_type, category_or_item, price=None, market=MARKET, api_key=None, price_display=None):
     """
     Generate a structured E-BOLEKA Facebook post using DeepSeek AI.
 
@@ -169,6 +214,8 @@ def generate_post(post_type, category_or_item, price=None, market=MARKET, api_ke
         post_type: "A"/"call_to_list" or "B"/"new_listing".
         category_or_item: Category name (Type A) or item title (Type B).
         price: Item price (Type B only).
+        price_display: Pre-formatted price string (e.g. "R150/day"). When
+            provided it overrides the automatic R{price} formatting.
         market: Target market (defaults to national South Africa).
         api_key: DeepSeek API key (defaults to env).
 
@@ -180,13 +227,13 @@ def generate_post(post_type, category_or_item, price=None, market=MARKET, api_ke
 
     if not api_key:
         logger.warning("No DeepSeek API key found. Using fallback post generator.")
-        return _generate_fallback_post(post_type, category_or_item, price, market)
+        return _generate_fallback_post(post_type, category_or_item, price, market, price_display)
 
     post_type_normalized = post_type.upper() if isinstance(post_type, str) else "A"
 
     try:
         client = _get_client(api_key)
-        system_prompt, user_prompt = _build_prompt(post_type_normalized, category_or_item, price)
+        system_prompt, user_prompt = _build_prompt(post_type_normalized, category_or_item, price, price_display)
 
         response = client.chat.completions.create(
             model=DEEPSEEK_MODEL,
@@ -205,7 +252,7 @@ def generate_post(post_type, category_or_item, price=None, market=MARKET, api_ke
 
         if not (structured["headline"] and structured["primary_text"] and structured["offer"]):
             logger.warning("AI returned incomplete structure; using fallback post generator.")
-            return _generate_fallback_post(post_type, category_or_item, price, market)
+            return _generate_fallback_post(post_type, category_or_item, price, market, price_display)
 
         structured["full_caption"] = _compose_caption(structured)
         logger.info(f"AI generated structured post (Type {post_type_normalized})")
@@ -213,16 +260,16 @@ def generate_post(post_type, category_or_item, price=None, market=MARKET, api_ke
 
     except Exception as e:
         logger.error(f"DeepSeek API error: {e}. Using fallback post generator.")
-        return _generate_fallback_post(post_type, category_or_item, price, market)
+        return _generate_fallback_post(post_type, category_or_item, price, market, price_display)
 
 
-def _generate_fallback_post(post_type, category_or_item, price=None, market=MARKET):
+def _generate_fallback_post(post_type, category_or_item, price=None, market=MARKET, price_display=None):
     """Hardcoded 'Sell Like Crazy' structured templates used when DeepSeek is unavailable."""
     post_type_normalized = post_type.upper() if isinstance(post_type, str) else "A"
     item = (category_or_item or "your gear").strip()
     cleaned = "".join(ch for ch in item.title().replace(" & ", " ").replace("'", "") if ch.isalnum())
     item_hashtag = cleaned[:20] or "Marketplace"
-    price_display = f"R{price}" if price else None
+    price_display = price_display or (f"R{price}" if price else None)
 
     if post_type_normalized in ("A", "CALL_TO_LIST"):
         templates = [
